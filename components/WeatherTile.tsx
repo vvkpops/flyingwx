@@ -23,18 +23,28 @@ export function WeatherTile({
   onUpdateMinima,
   onResetMinima
 }: WeatherTileProps) {
-  const tafHighlight = weatherData?.taf ? 
-    highlightWeatherText(weatherData.taf, minima) : 
+  // Verify the METAR data belongs to this ICAO
+  const isMetarValid = weatherData?.metar ? weatherData.metar.includes(icao) : false;
+  const metarToDisplay = isMetarValid ? weatherData?.metar : '';
+  const metarError = isMetarValid ? weatherData?.error : `Data mismatch for ${icao}`;
+  
+  // Verify the TAF data belongs to this ICAO
+  const isTafValid = weatherData?.taf ? weatherData.taf.includes(icao) : false;
+  const tafToDisplay = isTafValid ? weatherData?.taf : '';
+  
+  // Only highlight TAF if it's valid
+  const tafHighlight = tafToDisplay ? 
+    highlightWeatherText(tafToDisplay, minima) : 
     { html: '', hasViolations: false };
 
-  // Border color logic - exactly matching original
+  // Border color logic - exactly matching original with data validation
   let borderColor = 'border-gray-700'; // Default
   
   if (weatherData) {
-    if (weatherData.error) {
+    if (weatherData.error || !isMetarValid) {
       borderColor = 'border-yellow-500'; // Error state
-    } else if (weatherData.taf && tafHighlight.html) {
-      // Only check TAF violations if we have TAF data
+    } else if (tafToDisplay && tafHighlight.html) {
+      // Only check TAF violations if we have valid TAF data
       borderColor = tafHighlight.hasViolations ? 'border-red-500' : 'border-green-500';
     } else {
       borderColor = 'border-green-500'; // Has data but no TAF violations detected
@@ -100,13 +110,25 @@ export function WeatherTile({
         </div>
       )}
 
-      {weatherData?.metar && (
-        <div className="mt-2 text-xs">
-          <strong>METAR:</strong> {weatherData.metar}
+      {!isMetarValid && weatherData?.metar && (
+        <div className="mt-2 text-xs text-yellow-400">
+          <strong>Error:</strong> METAR data does not match station {icao}
         </div>
       )}
 
-      {weatherData?.taf && (
+      {metarToDisplay && (
+        <div className="mt-2 text-xs">
+          <strong>METAR:</strong> {metarToDisplay}
+        </div>
+      )}
+
+      {!isTafValid && weatherData?.taf && (
+        <div className="mt-2 text-xs text-yellow-400">
+          <strong>Notice:</strong> TAF data does not match station {icao}
+        </div>
+      )}
+
+      {tafToDisplay && (
         <div className="mt-2 text-xs taf-block">
           <strong>TAF:</strong>
           <div dangerouslySetInnerHTML={{ __html: tafHighlight.html }} />
