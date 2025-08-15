@@ -19,11 +19,14 @@ export function Clock({ position }: ClockProps) {
     return () => clearInterval(interval);
   }, []);
 
+  // Show placeholder during SSR/hydration
   if (!mounted || !time) {
+    const positionClass = position === 'left' 
+      ? 'absolute left-4 top-1/2 -translate-y-1/2'
+      : 'absolute right-4 top-1/2 -translate-y-1/2';
+    
     return (
-      <div className={`${position === 'left' 
-        ? 'absolute left-4 top-1/2 -translate-y-1/2'
-        : 'absolute right-4 top-1/2 -translate-y-1/2'} text-lg font-mono text-gray-300`}>
+      <div className={`${positionClass} text-lg font-mono text-gray-300`}>
         --:--:--
       </div>
     );
