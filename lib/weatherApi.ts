@@ -1,12 +1,12 @@
 import { WeatherData } from '../types/weather';
 
 const CORS_PROXY = 'https://corsproxy.io/?';
-const TAF_CACHE_MS = 10 * 60 * 1000; // 10 minutes
-const METAR_CACHE_MS = 1 * 60 * 1000; // 1 minute
+const TAF_CACHE_MS = 600000; // 10 minutes (matches original)
+const METAR_CACHE_MS = 60000; // 1 minute (matches original)
 
 interface CacheEntry {
   data: string;
-  timestamp: number;
+  time: number; // Using 'time' to match original
 }
 
 const cache: Record<string, { metar?: CacheEntry; taf?: CacheEntry }> = {};
@@ -19,7 +19,7 @@ async function fetchWithCache(
 ): Promise<string> {
   const cached = cache[icao]?.[type];
   
-  if (cached && (Date.now() - cached.timestamp < cacheMs)) {
+  if (cached && (Date.now() - cached.time < cacheMs)) {
     return cached.data;
   }
 
@@ -33,7 +33,7 @@ async function fetchWithCache(
     const cleanText = text.trim();
     
     if (!cache[icao]) cache[icao] = {};
-    cache[icao][type] = { data: cleanText, timestamp: Date.now() };
+    cache[icao][type] = { data: cleanText, time: Date.now() };
     
     return cleanText;
   } catch (error) {
