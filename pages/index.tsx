@@ -9,7 +9,7 @@ import { fetchWeatherData } from '../lib/weatherApi';
 
 const DEFAULT_MINIMA: Minima = { ceiling: 500, vis: 1 };
 
-export default function WeatherMonitor() {
+export default function FlyingWx() {
   const [weatherICAOs, setWeatherICAOs] = useState<string[]>([]);
   const [globalMinima, setGlobalMinima] = useState<Minima>(DEFAULT_MINIMA);
   const [individualMinima, setIndividualMinima] = useState<Record<string, Minima>>({});
@@ -107,7 +107,7 @@ export default function WeatherMonitor() {
     updateWeatherData();
   }, [updateWeatherData, isClient]);
 
-  // Auto-refresh every 5 minutes (matches original)
+  // Auto-refresh every 5 minutes
   useEffect(() => {
     if (!isClient) return;
     const interval = setInterval(updateWeatherData, 300000); // 5 minutes
@@ -142,7 +142,7 @@ export default function WeatherMonitor() {
 
   const updateGlobalMinima = useCallback((newMinima: Minima) => {
     setGlobalMinima(newMinima);
-    setIndividualMinima({}); // Reset all individual minima like original
+    setIndividualMinima({});
   }, []);
 
   const updateIndividualMinima = useCallback((icao: string, field: keyof Minima, value: number) => {
@@ -168,14 +168,14 @@ export default function WeatherMonitor() {
     return (
       <>
         <Head>
-          <title>Weather Monitor</title>
-          <meta name="description" content="Aviation Weather Monitor Dashboard" />
+          <title>FlyingWx</title>
+          <meta name="description" content="FlyingWx - Aviation Weather Monitor Dashboard" />
           <meta name="viewport" content="width=device-width, initial-scale=1" />
           <link rel="icon" href="/favicon.ico" />
         </Head>
         <div className="min-h-screen bg-gray-900 text-gray-200 font-sans flex items-center justify-center">
           <div className="text-center">
-            <div className="text-2xl font-bold mb-4">Weather Monitor</div>
+            <div className="text-2xl font-bold mb-4">FlyingWx</div>
             <div className="text-gray-400">Loading...</div>
           </div>
         </div>
@@ -186,8 +186,8 @@ export default function WeatherMonitor() {
   return (
     <>
       <Head>
-        <title>Weather Monitor</title>
-        <meta name="description" content="Aviation Weather Monitor Dashboard" />
+        <title>FlyingWx</title>
+        <meta name="description" content="FlyingWx - Aviation Weather Monitor Dashboard" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <link rel="icon" href="/favicon.ico" />
       </Head>
@@ -195,7 +195,7 @@ export default function WeatherMonitor() {
       <div className="min-h-screen bg-gray-900 text-gray-200 font-sans">
         <header className="relative p-4 bg-gray-800 shadow-md text-center text-xl font-bold mb-6 max-w-screen-2xl mx-auto">
           <Clock position="left" />
-          Weather Monitor
+          FlyingWx
           <Clock position="right" />
         </header>
 
@@ -225,7 +225,7 @@ export default function WeatherMonitor() {
         </div>
 
         <footer className="text-sm text-center text-gray-500 py-4 max-w-screen-2xl mx-auto">
-          Aviation Weather Data | Updated {lastUpdated.toUTCString().slice(17, 25)}
+          FlyingWx | Weather data from Aviation Weather Center | Updated {lastUpdated.toUTCString().slice(17, 25)}
         </footer>
       </div>
     </>
