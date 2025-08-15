@@ -1,44 +1,48 @@
 import { WeatherData, PIREP, SIGMET, StationStatus } from '../types/weather';
 
+const BASE_URL = 'https://aviationweather.gov/api/data';
 const CORS_PROXY = 'https://corsproxy.io/?';
-const TAF_CACHE_MS = 600000; // 10 minutes
-const METAR_CACHE_MS = 60000; // 1 minute
-const PIREP_CACHE_MS = 120000; // 2 minutes
-const SIGMET_CACHE_MS = 300000; // 5 minutes
 
 interface CacheEntry {
   data: any;
-  time: number;
+  timestamp: number;
 }
 
-const cache: Record<string, { [key: string]: CacheEntry }> = {};
+const cache: Record<string, CacheEntry> = {};
 
-async function fetchWithCache(
-  url: string,
-  key: string,
-  cacheMs: number
-): Promise<any> {
-  const cached = cache[key];
+// Cache durations (in milliseconds)
+const CACHE_DURATIONS = {
+  METAR: 60000,     // 1 minute
+  TAF: 600000,      // 10 minutes
+  PIREP: 120000,    // 2 minutes
+  SIGMET: 300000,   // 5 minutes
+  AIRMET: 600000,   // 10 minutes
+};
+
+async function fetchWithCache(url: string, cacheKey: string, cacheDuration: number): Promise<any> {
+  const cached = cache[cacheKey];
   
-  if (cached && (Date.now() - cached.time < cacheMs)) {
+  if (cached && (Date.now() - cached.timestamp < cacheDuration)) {
     return cached.data;
   }
 
   try {
-    const response = await fetch(url);
+    const response = await fetch(`${CORS_PROXY}${url}`);
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
     
     const data = await response.json();
     
-    if (!cache[key]) cache[key] = {};
-    cache[key] = { data, time: Date.now() };
+    cache[cacheKey] = {
+      data,
+      timestamp: Date.now()
+    };
     
     return data;
   } catch (error) {
-    console.error(`Error fetching ${key}:`, error);
-    return null;
+    console.error(`Error fetching ${cacheKey}:`, error);
+    throw error;
   }
 }
 
@@ -48,13 +52,21 @@ export async function fetchWeatherData(icao: string): Promise<WeatherData> {
   }
 
   try {
-    const [metarResponse, tafResponse] = await Promise.all([
-      fetch(`${CORS_PROXY}https://aviationweather.gov/cgi-bin/data/metar.php?ids=${icao}&format=raw`),
-      fetch(`${CORS_PROXY}https://aviationweather.gov/cgi-bin/data/taf.php?ids=${icao}&format=raw`)
+    const [metarData, tafData] = await Promise.all([
+      fetchWithCache(
+        `${BASE_URL}/metar?ids=${icao}&format=json`,
+        `metar-${icao}`,
+        CACHE_DURATIONS.METAR
+      ),
+      fetchWithCache(
+        `${BASE_URL}/taf?ids=${icao}&format=json`,
+        `taf-${icao}`,
+        CACHE_DURATIONS.TAF
+      )
     ]);
 
-    const metar = metarResponse.ok ? (await metarResponse.text()).trim() : '';
-    const taf = tafResponse.ok ? (await tafResponse.text()).trim() : '';
+    const metar = metarData?.[0]?.rawOb || '';
+    const taf = tafData?.[0]?.rawTAF || '';
 
     return { metar, taf };
   } catch (error) {
@@ -63,93 +75,188 @@ export async function fetchWeatherData(icao: string): Promise<WeatherData> {
   }
 }
 
-// Mock API functions for demonstration (replace with real API calls)
 export async function fetchPIREPs(icao: string, radiusNm: number = 50): Promise<PIREP[]> {
-  // Simulated PIREP data - replace with real API call
-  const mockPireps: PIREP[] = [
-    {
-      id: `pirep-${icao}-1`,
-      icao,
-      aircraft: 'B737',
-      altitude: 12000,
-      turbulence: 'LIGHT',
-      icing: 'NONE',
-      timestamp: new Date(Date.now() - 30 * 60000), // 30 minutes ago
-      rawReport: 'UA /OV ABC123 DEF234/TM 1545/FL120/TP B737/TB LGT/RM SMTH',
-      location: { lat: 47.6, lon: -52.7 }
-    },
-    {
-      id: `pirep-${icao}-2`,
-      icao,
-      aircraft: 'A320',
-      altitude: 18000,
-      turbulence: 'MODERATE',
-      icing: 'TRACE',
-      timestamp: new Date(Date.now() - 60 * 60000), // 1 hour ago
-      rawReport: 'UA /OV XYZ789 ABC123/TM 1445/FL180/TP A320/TB MOD/IC TRC',
-      location: { lat: 47.5, lon: -52.8 }
-    }
-  ];
+  try {
+    const data = await fetchWithCache(
+      `${BASE_URL}/pirep?ids=${icao}&distance=${radiusNm}&format=json`,
+      `pirep-${icao}-${radiusNm}`,
+      CACHE_DURATIONS.PIREP
+    );
 
-  // Simulate API delay
-  await new Promise(resolve => setTimeout(resolve, 500));
-  return mockPireps;
+    if (!Array.isArray(data)) return [];
+
+    return data.map((pirep: any, index: number) => ({
+      id: pirep.pirepId || `pirep-${icao}-${index}`,
+      icao: pirep.icaoId || icao,
+      aircraft: pirep.aircraftRef || 'UNKNOWN',
+      altitude: pirep.altitudeFtMsl || 0,
+      turbulence: mapTurbulence(pirep.turbulence),
+      icing: mapIcing(pirep.icing),
+      timestamp: new Date(pirep.obsTime || Date.now()),
+      rawReport: pirep.rawOb || '',
+      location: {
+        lat: pirep.lat || 0,
+        lon: pirep.lon || 0
+      }
+    }));
+  } catch (error) {
+    console.error(`Error fetching PIREPs for ${icao}:`, error);
+    return [];
+  }
 }
 
 export async function fetchSIGMETs(icao: string, radiusNm: number = 100): Promise<SIGMET[]> {
-  // Simulated SIGMET data - replace with real API call
-  const mockSigmets: SIGMET[] = [
-    {
-      id: `sigmet-${icao}-1`,
-      type: 'SIGMET',
-      hazard: 'TURB',
-      severity: 'MODERATE',
-      altitudeMin: 15000,
-      altitudeMax: 25000,
-      validFrom: new Date(Date.now() - 30 * 60000),
-      validTo: new Date(Date.now() + 2 * 60 * 60000),
-      affectedICAOs: [icao],
-      rawText: `SIGMET for moderate turbulence between FL150-FL250 in vicinity of ${icao}`
-    }
-  ];
+  try {
+    const data = await fetchWithCache(
+      `${BASE_URL}/airsigmet?ids=${icao}&distance=${radiusNm}&format=json`,
+      `sigmet-${icao}-${radiusNm}`,
+      CACHE_DURATIONS.SIGMET
+    );
 
-  await new Promise(resolve => setTimeout(resolve, 300));
-  return mockSigmets;
+    if (!Array.isArray(data)) return [];
+
+    return data.map((sigmet: any, index: number) => ({
+      id: sigmet.airsigmetId || `sigmet-${icao}-${index}`,
+      type: sigmet.airsigmetType || 'SIGMET',
+      hazard: mapHazard(sigmet.hazard),
+      severity: mapSeverity(sigmet.severity),
+      altitudeMin: sigmet.altitudeLowFt || 0,
+      altitudeMax: sigmet.altitudeHighFt || 60000,
+      validFrom: new Date(sigmet.validTimeFrom || Date.now()),
+      validTo: new Date(sigmet.validTimeTo || Date.now() + 6 * 60 * 60 * 1000),
+      affectedICAOs: [icao],
+      rawText: sigmet.rawAirsigmet || ''
+    }));
+  } catch (error) {
+    console.error(`Error fetching SIGMETs for ${icao}:`, error);
+    return [];
+  }
 }
 
 export async function fetchStationStatus(icao: string): Promise<StationStatus> {
-  const [weatherData, pireps, sigmets] = await Promise.all([
-    fetchWeatherData(icao),
-    fetchPIREPs(icao),
-    fetchSIGMETs(icao)
-  ]);
+  try {
+    const [weatherData, pireps, sigmets] = await Promise.all([
+      fetchWeatherData(icao),
+      fetchPIREPs(icao),
+      fetchSIGMETs(icao)
+    ]);
 
-  // Calculate operational status based on weather conditions
-  let operationalStatus: 'NORMAL' | 'CAUTION' | 'CRITICAL' = 'NORMAL';
-  let delayProbability = 0;
+    // Calculate operational status based on real weather conditions
+    let operationalStatus: 'NORMAL' | 'CAUTION' | 'CRITICAL' = 'NORMAL';
+    let delayProbability = 0;
 
-  // Simple logic for demo - enhance with real algorithms
-  if (weatherData.error) {
-    operationalStatus = 'CRITICAL';
-    delayProbability = 80;
-  } else if (sigmets.length > 0 || pireps.some(p => p.turbulence === 'SEVERE')) {
-    operationalStatus = 'CAUTION';
-    delayProbability = 40;
-  } else if (pireps.some(p => p.turbulence === 'MODERATE')) {
-    operationalStatus = 'CAUTION';
-    delayProbability = 20;
+    // Analyze weather conditions
+    if (weatherData.error) {
+      operationalStatus = 'CRITICAL';
+      delayProbability = 85;
+    } else {
+      // Check for severe weather in SIGMETs
+      const severeSigmets = sigmets.filter(s => 
+        s.severity === 'SEVERE' || s.hazard === 'CONVECTIVE'
+      );
+      
+      // Check for severe turbulence/icing in PIREPs
+      const severePireps = pireps.filter(p => 
+        p.turbulence === 'SEVERE' || p.icing === 'SEVERE'
+      );
+
+      if (severeSigmets.length > 0 || severePireps.length > 0) {
+        operationalStatus = 'CRITICAL';
+        delayProbability = 70;
+      } else if (sigmets.length > 0 || pireps.some(p => p.turbulence === 'MODERATE' || p.icing === 'MODERATE')) {
+        operationalStatus = 'CAUTION';
+        delayProbability = 35;
+      }
+
+      // Analyze METAR for low visibility/ceiling
+      if (weatherData.metar) {
+        const metar = weatherData.metar.toLowerCase();
+        
+        // Check for low visibility
+        const visMatch = metar.match(/(\d{1,2})sm/);
+        const visibility = visMatch ? parseInt(visMatch[1]) : 10;
+        
+        // Check for low ceiling
+        const ceilingMatch = metar.match(/(ovc|bkn)(\d{3})/);
+        const ceiling = ceilingMatch ? parseInt(ceilingMatch[2]) * 100 : 5000;
+        
+        if (visibility < 1 || ceiling < 200) {
+          operationalStatus = 'CRITICAL';
+          delayProbability = Math.max(delayProbability, 80);
+        } else if (visibility < 3 || ceiling < 500) {
+          operationalStatus = operationalStatus === 'NORMAL' ? 'CAUTION' : operationalStatus;
+          delayProbability = Math.max(delayProbability, 45);
+        }
+      }
+    }
+
+    return {
+      icao,
+      name: getAirportName(icao),
+      metar: weatherData,
+      pireps,
+      sigmets,
+      operationalStatus,
+      delayProbability,
+      lastUpdated: new Date()
+    };
+  } catch (error) {
+    console.error(`Error fetching station status for ${icao}:`, error);
+    return {
+      icao,
+      name: getAirportName(icao),
+      metar: { metar: '', taf: '', error: 'Failed to fetch data' },
+      pireps: [],
+      sigmets: [],
+      operationalStatus: 'CRITICAL',
+      delayProbability: 90,
+      lastUpdated: new Date()
+    };
   }
+}
 
-  return {
-    icao,
-    name: getAirportName(icao),
-    metar: weatherData,
-    pireps,
-    sigmets,
-    operationalStatus,
-    delayProbability,
-    lastUpdated: new Date()
-  };
+// Helper functions for mapping API data
+function mapTurbulence(turbulence: any): 'NONE' | 'LIGHT' | 'MODERATE' | 'SEVERE' {
+  if (!turbulence) return 'NONE';
+  const intensity = turbulence.intensity?.toLowerCase() || '';
+  
+  if (intensity.includes('severe') || intensity.includes('extreme')) return 'SEVERE';
+  if (intensity.includes('moderate')) return 'MODERATE';
+  if (intensity.includes('light')) return 'LIGHT';
+  return 'NONE';
+}
+
+function mapIcing(icing: any): 'NONE' | 'TRACE' | 'LIGHT' | 'MODERATE' | 'SEVERE' {
+  if (!icing) return 'NONE';
+  const intensity = icing.intensity?.toLowerCase() || '';
+  
+  if (intensity.includes('severe') || intensity.includes('heavy')) return 'SEVERE';
+  if (intensity.includes('moderate')) return 'MODERATE';
+  if (intensity.includes('light')) return 'LIGHT';
+  if (intensity.includes('trace')) return 'TRACE';
+  return 'NONE';
+}
+
+function mapHazard(hazard: any): 'TURB' | 'ICE' | 'IFR' | 'MT_OBSC' | 'CONVECTIVE' {
+  if (!hazard) return 'TURB';
+  const h = hazard.toLowerCase();
+  
+  if (h.includes('turbulence')) return 'TURB';
+  if (h.includes('icing')) return 'ICE';
+  if (h.includes('ifr') || h.includes('visibility')) return 'IFR';
+  if (h.includes('mountain') || h.includes('obscur')) return 'MT_OBSC';
+  if (h.includes('convective') || h.includes('thunderstorm')) return 'CONVECTIVE';
+  
+  return 'TURB';
+}
+
+function mapSeverity(severity: any): 'LIGHT' | 'MODERATE' | 'SEVERE' {
+  if (!severity) return 'MODERATE';
+  const s = severity.toLowerCase();
+  
+  if (s.includes('severe') || s.includes('extreme')) return 'SEVERE';
+  if (s.includes('light') || s.includes('weak')) return 'LIGHT';
+  return 'MODERATE';
 }
 
 function getAirportName(icao: string): string {
@@ -163,49 +270,55 @@ function getAirportName(icao: string): string {
     'KATL': 'Atlanta Hartsfield',
     'KSEA': 'Seattle Tacoma',
     'KBOS': 'Boston Logan',
-    'KMIA': 'Miami Intl'
+    'KMIA': 'Miami Intl',
+    'KEWR': 'Newark Liberty',
+    'KSFO': 'San Francisco Intl',
+    'KLAS': 'Las Vegas McCarran',
+    'KPHX': 'Phoenix Sky Harbor',
+    'KDFW': 'Dallas Fort Worth',
+    'KIAH': 'Houston Intercontinental',
+    'KMSP': 'Minneapolis St Paul',
+    'KDTW': 'Detroit Metropolitan',
+    'KPHL': 'Philadelphia Intl',
+    'KLGA': 'LaGuardia',
+    'KDCA': 'Reagan National',
+    'KBWI': 'Baltimore Washington',
+    'KMDW': 'Chicago Midway',
+    'KHOU': 'Houston Hobby',
+    'KOAK': 'Oakland Intl',
+    'KSAN': 'San Diego Intl',
+    'KTPA': 'Tampa Intl',
+    'KBNA': 'Nashville Intl',
+    'KSTL': 'St Louis Lambert',
+    'KCVG': 'Cincinnati Northern Kentucky',
+    'KCLT': 'Charlotte Douglas',
+    'KPIT': 'Pittsburgh Intl',
+    'KCLE': 'Cleveland Hopkins',
+    'KIND': 'Indianapolis Intl',
+    'KMKE': 'Milwaukee Mitchell',
+    'KRIC': 'Richmond Intl',
+    'KRDU': 'Raleigh Durham',
+    'KGSO': 'Greensboro Piedmont',
+    'KAVL': 'Asheville Regional',
+    'KCHA': 'Chattanooga Metropolitan',
+    'KBHM': 'Birmingham Shuttlesworth',
+    'KHSV': 'Huntsville Intl',
+    'KMOB': 'Mobile Regional',
+    'KGPT': 'Gulfport Biloxi',
+    'KLIX': 'New Orleans Intl',
+    'KBTR': 'Baton Rouge Metropolitan',
+    'KSHV': 'Shreveport Regional',
+    'KTXK': 'Texarkana Regional',
+    'KLIT': 'Little Rock National',
+    'KXNA': 'Northwest Arkansas',
+    'KTUL': 'Tulsa Intl'
   };
   return names[icao] || icao;
 }
 
-// Mock flight data
-export async function fetchFlights(): Promise<FlightInfo[]> {
-  const mockFlights: FlightInfo[] = [
-    {
-      id: 'FX001',
-      callsign: 'FlyingWx 001',
-      departure: 'CYYT',
-      arrival: 'KJFK',
-      alternate: 'KEWR',
-      etd: new Date(Date.now() + 2 * 60 * 60000),
-      eta: new Date(Date.now() + 5 * 60 * 60000),
-      status: 'SCHEDULED',
-      aircraft: 'B737-800',
-      route: 'CYYT..KJFK'
-    },
-    {
-      id: 'FX002',
-      callsign: 'FlyingWx 002',
-      departure: 'KJFK',
-      arrival: 'EGLL',
-      alternate: 'EGKK',
-      etd: new Date(Date.now() + 1 * 60 * 60000),
-      eta: new Date(Date.now() + 8 * 60 * 60000),
-      status: 'DELAYED',
-      aircraft: 'A350-900',
-      route: 'KJFK..EGLL'
-    },
-    {
-      id: 'FX003',
-      callsign: 'FlyingWx 003',
-      departure: 'KORD',
-      arrival: 'KLAX',
-      etd: new Date(Date.now() - 1 * 60 * 60000),
-      eta: new Date(Date.now() + 3 * 60 * 60000),
-      status: 'ENROUTE',
-      aircraft: 'B787-9'
-    }
-  ];
-
-  return mockFlights;
+// Real flight data would come from your flight operations system
+export async function fetchFlights(): Promise<any[]> {
+  // This would integrate with your actual flight operations system
+  // For now, return empty array since we don't have access to flight data
+  return [];
 }
