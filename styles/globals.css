@@ -9,7 +9,7 @@
   border: 1.5px solid #334155;
   box-shadow: 0 10px 32px 0 rgba(16,24,39,0.18), 0 1.5px 8px 0 rgba(0,0,0,.09);
   backdrop-filter: blur(8px);
-  transition: box-shadow 0.28s, border 0.28s;
+  transition: box-shadow 0.28s, border 0.28s, transform 0.28s;
   margin-bottom: 0.5rem;
   position: relative;
   overflow: hidden;
@@ -83,4 +83,32 @@
   .flight-tile {
     margin-bottom: 1.2rem;
   }
+}
+
+/* Additional base styles */
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #111827;
+  color: #e5e7eb;
+}
+
+/* Ensure proper styling for inputs and buttons */
+input[type="text"], input[type="number"] {
+  outline: none;
+}
+
+input[type="text"]:focus, input[type="number"]:focus {
+  ring: 2px;
+  ring-color: #3b82f6;
+  border-color: #3b82f6;
+}
+
+button {
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+}
+
+button:hover {
+  transform: translateY(-1px);
 }
