@@ -1,0 +1,86 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Glassy, card style for weather tiles */
+.flight-tile {
+  background: rgba(30,41,59,0.86);
+  border-radius: 1.15rem;
+  border: 1.5px solid #334155;
+  box-shadow: 0 10px 32px 0 rgba(16,24,39,0.18), 0 1.5px 8px 0 rgba(0,0,0,.09);
+  backdrop-filter: blur(8px);
+  transition: box-shadow 0.28s, border 0.28s;
+  margin-bottom: 0.5rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.flight-tile:hover {
+  box-shadow: 0 18px 40px 2px #38bdf866, 0 1.5px 12px 0 #1e293b77;
+  border-color: #38bdf8;
+  transform: translateY(-2px) scale(1.018);
+  z-index: 4;
+}
+
+.flight-title {
+  text-shadow: 0 1.5px 8px #0ea5e980, 0 1px 2px #0008;
+  letter-spacing: .05em;
+  color: #7dd3fc;
+}
+
+.weather-remove-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 10;
+  background: rgba(17,24,39,0.82);
+  border: none;
+  border-radius: 50%;
+  width: 2.1rem;
+  height: 2.1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #f87171;
+  font-size: 1.28rem;
+  cursor: pointer;
+  box-shadow: 0 2px 10px #0ea5e980;
+  transition: background 0.18s, color 0.18s, box-shadow 0.18s, transform 0.16s;
+  outline: none;
+}
+
+.weather-remove-btn:hover {
+  background: #f87171;
+  color: #fff;
+  box-shadow: 0 4px 18px #ef444488;
+  transform: scale(1.12) rotate(-7deg);
+}
+
+.weather-remove-btn svg {
+  pointer-events: none;
+}
+
+.minima-default {
+  opacity: 0.7;
+  font-style: italic;
+}
+
+.minima-reset-btn {
+  font-size: 11px;
+  margin-left: 4px;
+  color: #fbbf24;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.minima-reset-btn:hover {
+  color: #fff;
+}
+
+@media (max-width: 640px) {
+  .flight-tile {
+    margin-bottom: 1.2rem;
+  }
+}
