@@ -73,6 +73,7 @@
   border: none;
   cursor: pointer;
   text-decoration: underline;
+  transition: color 0.2s;
 }
 
 .minima-reset-btn:hover {
@@ -85,30 +86,17 @@
   }
 }
 
-/* Additional base styles */
+/* Additional base styles for proper rendering */
 body {
   margin: 0;
   padding: 0;
-  background-color: #111827;
-  color: #e5e7eb;
 }
 
-/* Ensure proper styling for inputs and buttons */
-input[type="text"], input[type="number"] {
+/* Input focus states to match original */
+input[type="text"]:focus, 
+input[type="number"]:focus {
   outline: none;
-}
-
-input[type="text"]:focus, input[type="number"]:focus {
-  ring: 2px;
-  ring-color: #3b82f6;
-  border-color: #3b82f6;
-}
-
-button {
-  cursor: pointer;
-  transition: all 0.2s ease-in-out;
-}
-
-button:hover {
-  transform: translateY(-1px);
+  border-color: #7dd3fc;
+  background: #111827cc;
+  color: #fff;
 }
