@@ -1,8 +1,15 @@
 import { WeatherData, PIREP, SIGMET, StationStatus } from '../types/weather';
 
-// Aviation Weather Center API endpoints
-const BASE_URL = 'https://aviationweather.gov/api/data';
-const CORS_PROXY = 'https://corsproxy.io/?';
+// Updated API endpoints with working alternatives
+const AVIATIONWEATHER_BASE = 'https://aviationweather.gov/api/data';
+const CHECKWX_BASE = 'https://api.checkwx.com/v1';
+
+// Multiple CORS proxy options for better reliability
+const CORS_PROXIES = [
+  'https://api.allorigins.win/raw?url=',
+  'https://corsproxy.io/?',
+  'https://api.codetabs.com/v1/proxy?quest='
+];
 
 interface CacheEntry {
   data: any;
@@ -19,47 +26,75 @@ const CACHE_DURATIONS = {
   SIGMET: 300000,   // 5 minutes
 };
 
-async function fetchWithCache(url: string, cacheKey: string, cacheDuration: number): Promise<any> {
+async function fetchWithFallback(urls: string[], cacheKey: string, cacheDuration: number): Promise<any> {
   const cached = cache[cacheKey];
   
   if (cached && (Date.now() - cached.timestamp < cacheDuration)) {
+    console.log(`Cache hit for ${cacheKey}`);
     return cached.data;
   }
 
-  try {
-    const response = await fetch(`${CORS_PROXY}${url}`);
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+  let lastError: Error | null = null;
+
+  // Try each URL with each CORS proxy
+  for (const url of urls) {
+    for (const proxy of CORS_PROXIES) {
+      try {
+        console.log(`Trying: ${proxy}${encodeURIComponent(url)}`);
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+        
+        const response = await fetch(`${proxy}${encodeURIComponent(url)}`, {
+          signal: controller.signal,
+          headers: {
+            'Accept': 'application/json, text/plain, */*',
+            'User-Agent': 'FlyingWx/1.0'
+          }
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        const responseText = await response.text();
+        
+        // Check for common error responses
+        if (responseText.includes('error') || responseText.includes('Error') || 
+            responseText.includes('not found') || responseText.length < 10) {
+          throw new Error(`Invalid response: ${responseText.substring(0, 100)}`);
+        }
+        
+        let data;
+        try {
+          // Try to parse as JSON first
+          data = JSON.parse(responseText);
+        } catch (jsonError) {
+          // If not JSON, treat as plain text (for raw format responses)
+          data = responseText.trim();
+        }
+        
+        // Cache successful response
+        cache[cacheKey] = {
+          data,
+          timestamp: Date.now()
+        };
+        
+        console.log(`Success for ${cacheKey} via ${proxy}`);
+        return data;
+        
+      } catch (error) {
+        lastError = error as Error;
+        console.warn(`Failed ${cacheKey} via ${proxy}:`, error);
+        continue; // Try next proxy/URL combination
+      }
     }
-    
-    const responseText = await response.text();
-    
-    // Check if response is an error message
-    if (responseText.startsWith('error') || responseText.includes('error')) {
-      console.warn(`API returned error for ${cacheKey}: ${responseText}`);
-      return null;
-    }
-    
-    let data;
-    try {
-      // Try to parse as JSON
-      data = JSON.parse(responseText);
-    } catch (jsonError) {
-      // If JSON parsing fails, return the text as is
-      console.warn(`Failed to parse JSON for ${cacheKey}, returning text:`, responseText);
-      data = responseText;
-    }
-    
-    cache[cacheKey] = {
-      data,
-      timestamp: Date.now()
-    };
-    
-    return data;
-  } catch (error) {
-    console.error(`Error fetching ${cacheKey}:`, error);
-    return null;
   }
+
+  console.error(`All attempts failed for ${cacheKey}:`, lastError);
+  throw lastError || new Error('All fetch attempts failed');
 }
 
 export async function fetchWeatherData(icao: string): Promise<WeatherData> {
@@ -67,79 +102,130 @@ export async function fetchWeatherData(icao: string): Promise<WeatherData> {
     throw new Error('Invalid ICAO code');
   }
 
+  console.log(`Fetching weather data for ${icao}`);
+
   try {
-    // Try multiple API endpoints for better reliability
-    const [metarData, tafData] = await Promise.all([
-      fetchWithCache(
-        `${BASE_URL}/metar?stationString=${icao}&format=json&taf=false&hours=2`,
-        `metar-${icao}`,
-        CACHE_DURATIONS.METAR
-      ).catch(() => 
-        // Fallback to text format if JSON fails
-        fetchWithCache(
-          `${BASE_URL}/metar?stationString=${icao}&format=raw&hours=2`,
-          `metar-text-${icao}`,
-          CACHE_DURATIONS.METAR
-        )
-      ),
-      fetchWithCache(
-        `${BASE_URL}/taf?stationString=${icao}&format=json&hours=8`,
-        `taf-${icao}`,
-        CACHE_DURATIONS.TAF
-      ).catch(() =>
-        // Fallback to text format if JSON fails
-        fetchWithCache(
-          `${BASE_URL}/taf?stationString=${icao}&format=raw&hours=8`,
-          `taf-text-${icao}`,
-          CACHE_DURATIONS.TAF
-        )
-      )
+    // Try multiple data sources for better reliability
+    const metarUrls = [
+      `${AVIATIONWEATHER_BASE}/metar?stationString=${icao}&format=json&hours=2&taf=false`,
+      `${AVIATIONWEATHER_BASE}/metar?stationString=${icao}&format=raw&hours=2`,
+      `https://tgftp.nws.noaa.gov/data/observations/metar/stations/${icao}.TXT`
+    ];
+
+    const tafUrls = [
+      `${AVIATIONWEATHER_BASE}/taf?stationString=${icao}&format=json&hours=8`,
+      `${AVIATIONWEATHER_BASE}/taf?stationString=${icao}&format=raw&hours=8`,
+      `https://tgftp.nws.noaa.gov/data/forecasts/taf/stations/${icao}.TXT`
+    ];
+
+    const [metarData, tafData] = await Promise.allSettled([
+      fetchWithFallback(metarUrls, `metar-${icao}`, CACHE_DURATIONS.METAR),
+      fetchWithFallback(tafUrls, `taf-${icao}`, CACHE_DURATIONS.TAF)
     ]);
 
     let metar = '';
     let taf = '';
 
-    // Handle METAR response
-    if (metarData) {
-      if (Array.isArray(metarData) && metarData.length > 0) {
-        metar = metarData[0].rawOb || metarData[0].raw || '';
-      } else if (typeof metarData === 'string') {
-        metar = metarData;
+    // Process METAR data
+    if (metarData.status === 'fulfilled' && metarData.value) {
+      const data = metarData.value;
+      if (Array.isArray(data) && data.length > 0) {
+        // JSON format response
+        metar = data[0].rawOb || data[0].raw || data[0].reportBody || '';
+      } else if (typeof data === 'string') {
+        // Raw text format - extract the METAR line
+        const lines = data.split('\n').filter(line => line.trim());
+        if (lines.length > 0) {
+          // For NWS files, skip the timestamp line and get the METAR
+          metar = lines.length > 1 ? lines[1].trim() : lines[0].trim();
+        }
       }
     }
 
-    // Handle TAF response
-    if (tafData) {
-      if (Array.isArray(tafData) && tafData.length > 0) {
-        taf = tafData[0].rawTAF || tafData[0].raw || '';
-      } else if (typeof tafData === 'string') {
-        taf = tafData;
+    // Process TAF data
+    if (tafData.status === 'fulfilled' && tafData.value) {
+      const data = tafData.value;
+      if (Array.isArray(data) && data.length > 0) {
+        // JSON format response
+        taf = data[0].rawTAF || data[0].raw || data[0].reportBody || '';
+      } else if (typeof data === 'string') {
+        // Raw text format
+        const lines = data.split('\n').filter(line => line.trim());
+        if (lines.length > 0) {
+          // For NWS files, skip the timestamp line and get the TAF
+          taf = lines.length > 1 ? lines.slice(1).join('\n').trim() : lines[0].trim();
+        }
       }
     }
+
+    // Clean up the data
+    metar = cleanWeatherText(metar);
+    taf = cleanWeatherText(taf);
+
+    console.log(`Weather data fetched for ${icao}:`, { metar: metar.substring(0, 50), taf: taf.substring(0, 50) });
 
     return { metar, taf };
+
   } catch (error) {
     console.error(`Error fetching weather for ${icao}:`, error);
-    return { metar: '', taf: '', error: 'Failed to fetch data' };
+    return { 
+      metar: '', 
+      taf: '', 
+      error: `Failed to fetch data for ${icao}: ${error instanceof Error ? error.message : 'Unknown error'}` 
+    };
   }
+}
+
+function cleanWeatherText(text: string): string {
+  if (!text) return '';
+  
+  // Remove extra whitespace and normalize
+  let cleaned = text.replace(/\s+/g, ' ').trim();
+  
+  // Remove common prefixes/suffixes that aren't part of the actual report
+  cleaned = cleaned.replace(/^(METAR|TAF|SPECI)\s+/, '');
+  cleaned = cleaned.replace(/\s+(METAR|TAF|SPECI)$/, '');
+  
+  return cleaned;
 }
 
 export async function fetchPIREPs(icao: string, radiusNm: number = 50): Promise<PIREP[]> {
   try {
-    const data = await fetchWithCache(
-      `${BASE_URL}/pirep?stationString=${icao}&hoursBeforeNow=12&format=json`,
-      `pirep-${icao}-${radiusNm}`,
-      CACHE_DURATIONS.PIREP
-    );
+    console.log(`Fetching PIREPs for ${icao}`);
+    
+    const pirepUrls = [
+      `${AVIATIONWEATHER_BASE}/pirep?stationString=${icao}&hoursBeforeNow=12&format=json`,
+      `${AVIATIONWEATHER_BASE}/pirep?stationString=${icao}&hoursBeforeNow=12&format=raw`
+    ];
 
-    if (!data || !Array.isArray(data)) return [];
+    const data = await fetchWithFallback(pirepUrls, `pirep-${icao}-${radiusNm}`, CACHE_DURATIONS.PIREP);
+
+    if (!data) return [];
+
+    let pirepsArray: any[] = [];
+    
+    if (Array.isArray(data)) {
+      pirepsArray = data;
+    } else if (typeof data === 'string') {
+      // Parse raw PIREP text format
+      const lines = data.split('\n').filter(line => line.trim());
+      pirepsArray = lines.map((line, index) => ({
+        rawOb: line,
+        reportId: `pirep-${icao}-${index}`,
+        stationId: icao,
+        reportTime: new Date().toISOString(),
+        aircraftRef: 'UNKNOWN',
+        altitude: '0',
+        latitude: '0',
+        longitude: '0'
+      }));
+    }
 
     const now = new Date();
     const twelveHoursAgo = new Date(now.getTime() - 12 * 60 * 60 * 1000);
 
-    return data
+    return pirepsArray
       .map((pirep: any, index: number) => {
-        // Safely parse timestamp
         let timestamp = new Date();
         try {
           timestamp = new Date(pirep.reportTime || pirep.obsTime || Date.now());
@@ -164,6 +250,7 @@ export async function fetchPIREPs(icao: string, radiusNm: number = 50): Promise<
         };
       })
       .filter((pirep: PIREP) => pirep.timestamp >= twelveHoursAgo);
+
   } catch (error) {
     console.error(`Error fetching PIREPs for ${icao}:`, error);
     return [];
@@ -172,20 +259,41 @@ export async function fetchPIREPs(icao: string, radiusNm: number = 50): Promise<
 
 export async function fetchSIGMETs(icao: string, radiusNm: number = 100): Promise<SIGMET[]> {
   try {
-    const data = await fetchWithCache(
-      `${BASE_URL}/airsigmet?stationString=${icao}&format=json`,
-      `sigmet-${icao}-${radiusNm}`,
-      CACHE_DURATIONS.SIGMET
-    );
+    console.log(`Fetching SIGMETs for ${icao}`);
+    
+    const sigmetUrls = [
+      `${AVIATIONWEATHER_BASE}/airsigmet?stationString=${icao}&format=json`,
+      `${AVIATIONWEATHER_BASE}/airsigmet?stationString=${icao}&format=raw`
+    ];
 
-    if (!data || !Array.isArray(data)) return [];
+    const data = await fetchWithFallback(sigmetUrls, `sigmet-${icao}-${radiusNm}`, CACHE_DURATIONS.SIGMET);
+
+    if (!data) return [];
+
+    let sigmetsArray: any[] = [];
+    
+    if (Array.isArray(data)) {
+      sigmetsArray = data;
+    } else if (typeof data === 'string') {
+      // Parse raw SIGMET text format
+      const lines = data.split('\n').filter(line => line.trim());
+      sigmetsArray = lines.map((line, index) => ({
+        rawText: line,
+        hazardId: `sigmet-${icao}-${index}`,
+        hazardType: 'AIRMET',
+        severity: 'MODERATE',
+        validTimeFrom: new Date().toISOString(),
+        validTimeTo: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString(),
+        altitudeLow: '0',
+        altitudeHigh: '60000'
+      }));
+    }
 
     const now = new Date();
     const twelveHoursAgo = new Date(now.getTime() - 12 * 60 * 60 * 1000);
 
-    return data
+    return sigmetsArray
       .map((sigmet: any, index: number) => {
-        // Safely parse timestamps
         let validFrom = new Date();
         let validTo = new Date(Date.now() + 6 * 60 * 60 * 1000);
         
@@ -201,7 +309,7 @@ export async function fetchSIGMETs(icao: string, radiusNm: number = 100): Promis
 
         return {
           id: sigmet.hazardId || `sigmet-${icao}-${index}`,
-          type: sigmet.hazardType || 'AIRMET',
+          type: (sigmet.hazardType || 'AIRMET') as 'SIGMET' | 'AIRMET',
           hazard: mapHazardType(sigmet.hazard),
           severity: mapSeverityLevel(sigmet.severity || sigmet.hazard),
           altitudeMin: safeParseInt(sigmet.altitudeLow),
@@ -217,6 +325,7 @@ export async function fetchSIGMETs(icao: string, radiusNm: number = 100): Promis
       .filter((sigmet: SIGMET) => {
         return sigmet.validFrom >= twelveHoursAgo || sigmet.validTo >= now;
       });
+
   } catch (error) {
     console.error(`Error fetching SIGMETs for ${icao}:`, error);
     return [];
@@ -225,40 +334,46 @@ export async function fetchSIGMETs(icao: string, radiusNm: number = 100): Promis
 
 export async function fetchStationStatus(icao: string): Promise<StationStatus> {
   try {
-    const [weatherData, pireps, sigmets] = await Promise.all([
+    console.log(`Fetching station status for ${icao}`);
+    
+    const [weatherData, pireps, sigmets] = await Promise.allSettled([
       fetchWeatherData(icao),
       fetchPIREPs(icao),
       fetchSIGMETs(icao)
     ]);
 
+    const weather = weatherData.status === 'fulfilled' ? weatherData.value : { metar: '', taf: '', error: 'Failed to fetch weather' };
+    const pirepsList = pireps.status === 'fulfilled' ? pireps.value : [];
+    const sigmetsList = sigmets.status === 'fulfilled' ? sigmets.value : [];
+
     // Calculate operational status based on weather conditions
     let operationalStatus: 'NORMAL' | 'CAUTION' | 'CRITICAL' = 'NORMAL';
 
-    if (weatherData.error) {
+    if (weather.error) {
       operationalStatus = 'CRITICAL';
     } else {
       // Check for active severe weather in SIGMETs
-      const activeSevereSigmets = sigmets.filter(s => 
+      const activeSevereSigmets = sigmetsList.filter(s => 
         s.isActive && s.severity === 'SEVERE'
       );
       
       // Check for severe conditions in PIREPs
-      const severePireps = pireps.filter(p => 
+      const severePireps = pirepsList.filter(p => 
         !p.isExpired && (p.turbulence === 'SEVERE' || p.icing === 'SEVERE')
       );
 
       if (activeSevereSigmets.length > 0 || severePireps.length > 0) {
         operationalStatus = 'CRITICAL';
       } else if (
-        sigmets.some(s => s.isActive) || 
-        pireps.some(p => !p.isExpired && (p.turbulence === 'MODERATE' || p.icing === 'MODERATE'))
+        sigmetsList.some(s => s.isActive) || 
+        pirepsList.some(p => !p.isExpired && (p.turbulence === 'MODERATE' || p.icing === 'MODERATE'))
       ) {
         operationalStatus = 'CAUTION';
       }
 
       // Analyze METAR for critical conditions
-      if (weatherData.metar) {
-        const conditions = parseMetarConditions(weatherData.metar);
+      if (weather.metar) {
+        const conditions = parseMetarConditions(weather.metar);
         
         if (conditions.visibility < 0.5 || conditions.ceiling < 100) {
           operationalStatus = 'CRITICAL';
@@ -271,18 +386,19 @@ export async function fetchStationStatus(icao: string): Promise<StationStatus> {
     return {
       icao,
       name: getAirportName(icao),
-      metar: weatherData,
-      pireps,
-      sigmets,
+      metar: weather,
+      pireps: pirepsList,
+      sigmets: sigmetsList,
       operationalStatus,
       lastUpdated: new Date()
     };
+
   } catch (error) {
     console.error(`Error fetching station status for ${icao}:`, error);
     return {
       icao,
       name: getAirportName(icao),
-      metar: { metar: '', taf: '', error: 'Failed to fetch data' },
+      metar: { metar: '', taf: '', error: `Failed to fetch data for ${icao}` },
       pireps: [],
       sigmets: [],
       operationalStatus: 'CRITICAL',
@@ -291,7 +407,7 @@ export async function fetchStationStatus(icao: string): Promise<StationStatus> {
   }
 }
 
-// Safe parsing helper functions
+// Helper functions (unchanged but included for completeness)
 function safeParseInt(value: any, defaultValue: number = 0): number {
   if (value === null || value === undefined) return defaultValue;
   const parsed = parseInt(String(value));
@@ -309,7 +425,6 @@ function safeToLowerCase(value: any): string {
   return String(value).toLowerCase();
 }
 
-// Helper functions for mapping API responses to our types
 function mapTurbulenceIntensity(condition: any): 'NONE' | 'LIGHT' | 'MODERATE' | 'SEVERE' {
   if (!condition) return 'NONE';
   
@@ -404,6 +519,11 @@ function getAirportName(icao: string): string {
     'CYHZ': 'Halifax Stanfield',
     'CYYR': 'Goose Bay',
     'CYDF': 'Deer Lake',
+    'CYQB': 'Quebec City',
+    'CYUL': 'Montreal Trudeau',
+    'CYZV': 'Sept-Îles',
+    'CYYG': 'Charlottetown',
+    'CYFC': 'Fredericton',
     'KJFK': 'John F Kennedy Intl',
     'EGLL': 'London Heathrow',
     'KORD': 'Chicago O\'Hare',
