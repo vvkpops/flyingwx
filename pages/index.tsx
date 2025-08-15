@@ -9,7 +9,7 @@ import { ViewModeSelector } from '../components/ViewModeSelector';
 import { SystemOverview } from '../components/SystemOverview';
 import { ViewProvider, useViewMode } from '../lib/viewContext';
 import { WeatherData, Minima, StationStatus } from '../types/weather';
-import { fetchWeatherData, fetchStationStatus } from '../lib/weatherApi';
+import { fetchWeatherData, fetchStationStatus } from '../lib/weatherApiClient';
 
 const DEFAULT_MINIMA: Minima = { ceiling: 800, vis: 2 };
 
@@ -106,26 +106,50 @@ function FlyingWxContent() {
     setError(null);
     
     try {
-      const stationPromises = icaos.map(async (icao) => {
-        try {
-          return await fetchStationStatus(icao);
-        } catch (error) {
-          console.error(`Error loading station ${icao}:`, error);
-          return {
-            icao,
-            name: icao,
-            metar: { metar: '', taf: '', error: `Failed to load ${icao}` },
-            pireps: [],
-            sigmets: [],
-            operationalStatus: 'CRITICAL' as const,
-            lastUpdated: new Date()
-          };
-        }
-      });
+      console.log(`Loading ${icaos.length} dispatcher stations:`, icaos);
       
-      const stations = await Promise.all(stationPromises);
-      setDispatcherStations(stations);
+      // Load stations in batches to avoid overwhelming the API
+      const batchSize = 3;
+      const stations: StationStatus[] = [];
+      
+      for (let i = 0; i < icaos.length; i += batchSize) {
+        const batch = icaos.slice(i, i + batchSize);
+        console.log(`Loading batch ${Math.floor(i / batchSize) + 1}:`, batch);
+        
+        const stationPromises = batch.map(async (icao) => {
+          try {
+            const station = await fetchStationStatus(icao);
+            console.log(`Successfully loaded ${icao}:`, station.metar.metar ? 'Has METAR' : 'No METAR');
+            return station;
+          } catch (error) {
+            console.error(`Error loading station ${icao}:`, error);
+            return {
+              icao,
+              name: icao,
+              metar: { metar: '', taf: '', error: `Failed to load ${icao}` },
+              pireps: [],
+              sigmets: [],
+              operationalStatus: 'CRITICAL' as const,
+              lastUpdated: new Date()
+            };
+          }
+        });
+        
+        const batchStations = await Promise.all(stationPromises);
+        stations.push(...batchStations);
+        
+        // Update UI progressively
+        setDispatcherStations([...stations]);
+        
+        // Small delay between batches to be nice to APIs
+        if (i + batchSize < icaos.length) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+      
       setLastUpdated(new Date());
+      console.log(`Successfully loaded ${stations.length} stations`);
+      
     } catch (error) {
       console.error('Error loading dispatcher stations:', error);
       setError('Failed to load weather stations');
@@ -143,23 +167,44 @@ function FlyingWxContent() {
     const newWeatherData: Record<string, WeatherData> = {};
     
     try {
-      const weatherPromises = weatherICAOs.map(async (icao) => {
-        try {
-          const data = await fetchWeatherData(icao);
-          newWeatherData[icao] = data;
-        } catch (error) {
-          console.error(`Error fetching weather for ${icao}:`, error);
-          newWeatherData[icao] = { 
-            metar: '', 
-            taf: '', 
-            error: `Failed to fetch data for ${icao}` 
-          };
-        }
-      });
+      console.log(`Updating weather for ${weatherICAOs.length} ICAOs:`, weatherICAOs);
       
-      await Promise.all(weatherPromises);
-      setWeatherData(newWeatherData);
+      // Load weather data in batches
+      const batchSize = 3;
+      
+      for (let i = 0; i < weatherICAOs.length; i += batchSize) {
+        const batch = weatherICAOs.slice(i, i + batchSize);
+        console.log(`Loading weather batch ${Math.floor(i / batchSize) + 1}:`, batch);
+        
+        const weatherPromises = batch.map(async (icao) => {
+          try {
+            const data = await fetchWeatherData(icao);
+            console.log(`Weather for ${icao}:`, data.metar ? 'Has METAR' : 'No METAR', data.error ? `Error: ${data.error}` : '');
+            newWeatherData[icao] = data;
+          } catch (error) {
+            console.error(`Error fetching weather for ${icao}:`, error);
+            newWeatherData[icao] = { 
+              metar: '', 
+              taf: '', 
+              error: `Failed to fetch data for ${icao}` 
+            };
+          }
+        });
+        
+        await Promise.all(weatherPromises);
+        
+        // Update UI progressively
+        setWeatherData({ ...newWeatherData });
+        
+        // Small delay between batches
+        if (i + batchSize < weatherICAOs.length) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
+      
       setLastUpdated(new Date());
+      console.log(`Successfully updated weather for ${Object.keys(newWeatherData).length} ICAOs`);
+      
     } catch (error) {
       console.error('Error updating weather data:', error);
       setError('Failed to update weather data');
@@ -200,11 +245,13 @@ function FlyingWxContent() {
     );
     
     if (validICAOs.length > 0) {
+      console.log(`Adding ICAOs: ${validICAOs.join(', ')}`);
       setWeatherICAOs(prev => [...prev, ...validICAOs]);
     }
   }, [weatherICAOs]);
 
   const removeICAO = useCallback((icao: string) => {
+    console.log(`Removing ICAO: ${icao}`);
     setWeatherICAOs(prev => prev.filter(i => i !== icao));
     setWeatherData(prev => {
       const newData = { ...prev };
@@ -227,11 +274,13 @@ function FlyingWxContent() {
     );
     
     if (validICAOs.length > 0) {
+      console.log(`Adding dispatcher stations: ${validICAOs.join(', ')}`);
       setIsLoading(true);
       try {
         const newStationPromises = validICAOs.map(icao => fetchStationStatus(icao));
         const newStations = await Promise.all(newStationPromises);
         setDispatcherStations(prev => [...prev, ...newStations]);
+        console.log(`Successfully added ${newStations.length} stations`);
       } catch (error) {
         console.error('Error adding dispatcher stations:', error);
         setError('Failed to add weather stations');
@@ -242,6 +291,7 @@ function FlyingWxContent() {
   }, [dispatcherStations]);
 
   const removeDispatcherStation = useCallback((icao: string) => {
+    console.log(`Removing dispatcher station: ${icao}`);
     setDispatcherStations(prev => prev.filter(s => s.icao !== icao));
     if (selectedStationDetails?.icao === icao) {
       setSelectedStationDetails(null);
@@ -249,6 +299,7 @@ function FlyingWxContent() {
   }, [selectedStationDetails]);
 
   const refreshDispatcherStation = useCallback(async (icao: string) => {
+    console.log(`Refreshing dispatcher station: ${icao}`);
     setIsLoading(true);
     try {
       const updatedStation = await fetchStationStatus(icao);
@@ -260,6 +311,7 @@ function FlyingWxContent() {
       if (selectedStationDetails?.icao === icao) {
         setSelectedStationDetails(updatedStation);
       }
+      console.log(`Successfully refreshed ${icao}`);
     } catch (error) {
       console.error(`Error refreshing station ${icao}:`, error);
       setError(`Failed to refresh ${icao}`);
@@ -270,6 +322,7 @@ function FlyingWxContent() {
 
   // Minima management functions
   const updateGlobalMinima = useCallback((newMinima: Minima) => {
+    console.log(`Updating global minima:`, newMinima);
     setGlobalMinima(newMinima);
     setIndividualMinima({});
   }, []);
@@ -356,6 +409,19 @@ function FlyingWxContent() {
             </div>
           )}
 
+          {/* Loading Progress */}
+          {isLoading && (
+            <div className="bg-blue-900 border border-blue-500 text-blue-200 px-4 py-3 rounded mb-4">
+              <div className="flex items-center">
+                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span>Loading weather data...</span>
+              </div>
+            </div>
+          )}
+
           {viewMode === 'pilot' ? (
             // PILOT VIEW
             <>
@@ -366,18 +432,6 @@ function FlyingWxContent() {
 
               <div className="w-full">
                 <ICAOInput onAddICAOs={addICAOs} />
-                
-                {isLoading && (
-                  <div className="text-center py-4">
-                    <div className="inline-flex items-center">
-                      <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                      Loading weather data...
-                    </div>
-                  </div>
-                )}
                 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
                   {weatherICAOs.map(icao => (
@@ -424,15 +478,6 @@ function FlyingWxContent() {
                     <div className="text-sm text-gray-400">
                       Last updated: {lastUpdated.toLocaleTimeString()}
                     </div>
-                    {isLoading && (
-                      <div className="flex items-center text-sm text-blue-400">
-                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        Updating...
-                      </div>
-                    )}
                     <button
                       onClick={() => {
                         const currentICAOs = dispatcherStations.map(s => s.icao);
