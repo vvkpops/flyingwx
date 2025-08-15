@@ -1,3 +1,4 @@
+// pages/index.tsx (COMPLETE FIXED VERSION)
 import React, { useState, useEffect, useCallback } from 'react';
 import Head from 'next/head';
 import { WeatherTile } from '../components/WeatherTile';
@@ -7,17 +8,16 @@ import { MinimaControls } from '../components/MinimaControls';
 import { ICAOInput } from '../components/ICAOInput';
 import { ViewModeSelector } from '../components/ViewModeSelector';
 import { SystemOverview } from '../components/SystemOverview';
-import { FlightManagementPanel } from '../components/FlightManagementPanel';
 import { ViewProvider, useViewMode } from '../lib/viewContext';
 import { WeatherData, Minima, StationStatus } from '../types/weather';
 import { fetchWeatherData, fetchStationStatus } from '../lib/weatherApi';
 
-const DEFAULT_MINIMA: Minima = { ceiling: 500, vis: 1 };
+const DEFAULT_MINIMA: Minima = { ceiling: 800, vis: 2 };
 
 // Major airports for dispatcher default view
 const DEFAULT_DISPATCHER_STATIONS = [
-  'KJFK', 'KLAX', 'KORD', 'KATL', 'KDEN', 'KSEA', 'KBOS', 'KMIA', 
-  'CYYT', 'EGLL', 'KEWR', 'KSFO', 'KLAS', 'KPHX', 'KDFW'
+  'CYYT', 'CYQX', 'CYDF', 'CYYR', 'CYHZ', 'CYQM', 'CYWK', 'CYQB', 
+  'CYUL', 'CYZV', 'CYYG', 'CYFC', 'KEWR', 'KBOS', 'KPHL'
 ];
 
 function FlyingWxContent() {
@@ -124,7 +124,6 @@ function FlyingWxContent() {
             pireps: [],
             sigmets: [],
             operationalStatus: 'CRITICAL' as const,
-            delayProbability: 95,
             lastUpdated: new Date()
           };
         }
@@ -415,11 +414,9 @@ function FlyingWxContent() {
               </div>
             </>
           ) : (
-            // DISPATCHER VIEW - Multi-flight fleet management
+            // DISPATCHER VIEW - Multi-station weather operations
             <>
               <SystemOverview stations={dispatcherStations} />
-              
-              <FlightManagementPanel />
 
               <div className="bg-gray-800 rounded-xl p-4 mb-6">
                 <div className="flex justify-between items-center mb-4">
@@ -477,7 +474,7 @@ function FlyingWxContent() {
                       🏢 Welcome to FlyingWx Dispatcher View
                     </div>
                     <div className="text-gray-500 mb-4">
-                      Monitor multiple airports simultaneously for fleet operations
+                      Monitor multiple airports simultaneously for weather operations
                     </div>
                     <button
                       onClick={() => loadDispatcherStations(DEFAULT_DISPATCHER_STATIONS)}
@@ -513,11 +510,17 @@ function FlyingWxContent() {
                           {selectedStationDetails.metar.metar ? (
                             <div className="text-sm">
                               <div className="mb-2">
-                                <strong>METAR:</strong> {selectedStationDetails.metar.metar}
+                                <strong>METAR:</strong> 
+                                <div className="mt-1 font-mono text-blue-200 bg-gray-800 p-2 rounded">
+                                  {selectedStationDetails.metar.metar}
+                                </div>
                               </div>
                               {selectedStationDetails.metar.taf && (
                                 <div>
-                                  <strong>TAF:</strong> {selectedStationDetails.metar.taf}
+                                  <strong>TAF:</strong>
+                                  <div className="mt-1 font-mono text-green-200 bg-gray-800 p-2 rounded">
+                                    {selectedStationDetails.metar.taf}
+                                  </div>
                                 </div>
                               )}
                             </div>
@@ -543,10 +546,6 @@ function FlyingWxContent() {
                               </span>
                             </div>
                             <div className="flex justify-between">
-                              <span>Delay Risk:</span>
-                              <span className="font-semibold">{selectedStationDetails.delayProbability}%</span>
-                            </div>
-                            <div className="flex justify-between">
                               <span>Last Updated:</span>
                               <span>{selectedStationDetails.lastUpdated.toLocaleString()}</span>
                             </div>
@@ -556,11 +555,11 @@ function FlyingWxContent() {
                         {/* PIREPs */}
                         <div className="bg-gray-700 rounded-lg p-4">
                           <h3 className="text-lg font-semibold mb-3">
-                            Pilot Reports ({selectedStationDetails.pireps.length})
+                            Pilot Reports ({selectedStationDetails.pireps.filter(p => !p.isExpired).length})
                           </h3>
-                          {selectedStationDetails.pireps.length > 0 ? (
+                          {selectedStationDetails.pireps.filter(p => !p.isExpired).length > 0 ? (
                             <div className="space-y-2 max-h-40 overflow-y-auto">
-                              {selectedStationDetails.pireps.map((pirep, index) => (
+                              {selectedStationDetails.pireps.filter(p => !p.isExpired).map((pirep, index) => (
                                 <div key={pirep.id || index} className="bg-gray-600 rounded p-2 text-sm">
                                   <div className="flex justify-between mb-1">
                                     <span className="font-semibold">{pirep.aircraft}</span>
@@ -604,13 +603,25 @@ function FlyingWxContent() {
                                 <div key={sigmet.id || index} className="bg-gray-600 rounded p-2 text-sm">
                                   <div className="flex justify-between mb-1">
                                     <span className="font-semibold">{sigmet.type}</span>
-                                    <span className={`text-xs px-2 py-1 rounded ${
-                                      sigmet.severity === 'SEVERE' ? 'bg-red-600' :
-                                      sigmet.severity === 'MODERATE' ? 'bg-yellow-600' :
-                                      'bg-blue-600'
-                                    }`}>
-                                      {sigmet.severity}
-                                    </span>
+                                    <div className="flex gap-2">
+                                      <span className={`text-xs px-2 py-1 rounded ${
+                                        sigmet.severity === 'SEVERE' ? 'bg-red-600' :
+                                        sigmet.severity === 'MODERATE' ? 'bg-yellow-600' :
+                                        'bg-blue-600'
+                                      }`}>
+                                        {sigmet.severity}
+                                      </span>
+                                      {sigmet.isExpired && (
+                                        <span className="text-xs px-2 py-1 rounded bg-gray-500">
+                                          EXPIRED
+                                        </span>
+                                      )}
+                                      {sigmet.isActive && (
+                                        <span className="text-xs px-2 py-1 rounded bg-green-600">
+                                          ACTIVE
+                                        </span>
+                                      )}
+                                    </div>
                                   </div>
                                   <div className="text-xs space-y-1">
                                     <div>Hazard: {sigmet.hazard}</div>
@@ -625,7 +636,7 @@ function FlyingWxContent() {
                               ))}
                             </div>
                           ) : (
-                            <div className="text-gray-400">No active weather warnings</div>
+                            <div className="text-gray-400">No weather warnings</div>
                           )}
                         </div>
                       </div>
@@ -668,3 +679,4 @@ export default function FlyingWx() {
     </ViewProvider>
   );
 }
+                        </button>
