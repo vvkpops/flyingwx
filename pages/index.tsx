@@ -18,12 +18,12 @@ export default function WeatherMonitor() {
   const [isLoading, setIsLoading] = useState(false);
   const [isClient, setIsClient] = useState(false);
 
-  // Handle hydration - only run on client side
+  // Handle hydration
   useEffect(() => {
     setIsClient(true);
   }, []);
 
-  // Load data from localStorage only after hydration
+  // Load from localStorage after hydration
   useEffect(() => {
     if (!isClient) return;
 
@@ -56,7 +56,7 @@ export default function WeatherMonitor() {
     }
   }, [isClient]);
 
-  // Save to localStorage when data changes (only on client)
+  // Save to localStorage
   useEffect(() => {
     if (!isClient) return;
     localStorage.setItem('weatherICAOs', JSON.stringify(weatherICAOs));
@@ -72,7 +72,7 @@ export default function WeatherMonitor() {
     localStorage.setItem('weatherMinima', JSON.stringify(individualMinima));
   }, [individualMinima, isClient]);
 
-  // Fetch weather data for all ICAOs
+  // Fetch weather data
   const updateWeatherData = useCallback(async () => {
     if (weatherICAOs.length === 0) return;
     
@@ -101,16 +101,16 @@ export default function WeatherMonitor() {
     }
   }, [weatherICAOs]);
 
-  // Update weather data when ICAOs change
+  // Update when ICAOs change
   useEffect(() => {
     if (!isClient) return;
     updateWeatherData();
   }, [updateWeatherData, isClient]);
 
-  // Auto-refresh every 5 minutes
+  // Auto-refresh every 5 minutes (matches original)
   useEffect(() => {
     if (!isClient) return;
-    const interval = setInterval(updateWeatherData, 5 * 60 * 1000);
+    const interval = setInterval(updateWeatherData, 300000); // 5 minutes
     return () => clearInterval(interval);
   }, [updateWeatherData, isClient]);
 
@@ -142,7 +142,7 @@ export default function WeatherMonitor() {
 
   const updateGlobalMinima = useCallback((newMinima: Minima) => {
     setGlobalMinima(newMinima);
-    setIndividualMinima({});
+    setIndividualMinima({}); // Reset all individual minima like original
   }, []);
 
   const updateIndividualMinima = useCallback((icao: string, field: keyof Minima, value: number) => {
@@ -163,7 +163,7 @@ export default function WeatherMonitor() {
     });
   }, []);
 
-  // Don't render until hydrated
+  // Loading screen during hydration
   if (!isClient) {
     return (
       <>
