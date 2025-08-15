@@ -15,7 +15,6 @@ export interface ParsedWeatherConditions {
   isGreater: boolean;
 }
 
-// New types for Dispatcher View
 export interface PIREP {
   id: string;
   icao: string;
@@ -29,6 +28,7 @@ export interface PIREP {
     lat: number;
     lon: number;
   };
+  isExpired?: boolean;
 }
 
 export interface SIGMET {
@@ -42,6 +42,8 @@ export interface SIGMET {
   validTo: Date;
   affectedICAOs: string[];
   rawText: string;
+  isExpired?: boolean;
+  isActive?: boolean;
 }
 
 export interface StationStatus {
@@ -51,21 +53,7 @@ export interface StationStatus {
   pireps: PIREP[];
   sigmets: SIGMET[];
   operationalStatus: 'NORMAL' | 'CAUTION' | 'CRITICAL';
-  delayProbability: number;
   lastUpdated: Date;
-}
-
-export interface FlightInfo {
-  id: string;
-  callsign: string;
-  departure: string;
-  arrival: string;
-  alternate?: string;
-  etd: Date;
-  eta: Date;
-  status: 'SCHEDULED' | 'DEPARTED' | 'ENROUTE' | 'DELAYED' | 'CANCELLED';
-  aircraft: string;
-  route?: string;
 }
 
 export type ViewMode = 'pilot' | 'dispatcher';
