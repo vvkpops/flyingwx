@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 
 interface ICAOInputProps {
   onAddICAOs: (icaos: string[]) => void;
@@ -6,6 +6,7 @@ interface ICAOInputProps {
 
 export function ICAOInput({ onAddICAOs }: ICAOInputProps) {
   const [input, setInput] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -21,6 +22,10 @@ export function ICAOInput({ onAddICAOs }: ICAOInputProps) {
     if (icaos.length > 0) {
       onAddICAOs(icaos);
       setInput('');
+      // Auto-focus like original
+      if (inputRef.current) {
+        inputRef.current.focus();
+      }
     }
   };
 
@@ -28,11 +33,12 @@ export function ICAOInput({ onAddICAOs }: ICAOInputProps) {
     <div className="flex justify-center gap-2 mb-4">
       <form onSubmit={handleSubmit} className="flex gap-2">
         <input
+          ref={inputRef}
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Enter ICAOs (e.g. CYYT,EGLL,KJFK)"
-          className="bg-gray-700 p-2 rounded text-center w-72 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="bg-gray-700 p-2 rounded text-center w-72 transition-colors border border-gray-600 focus:outline-none focus:border-blue-400"
           maxLength={50}
         />
         <button
