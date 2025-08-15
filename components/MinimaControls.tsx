@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Minima } from '../types/weather';
 
 interface MinimaControlsProps {
@@ -9,6 +9,12 @@ interface MinimaControlsProps {
 export function MinimaControls({ globalMinima, onUpdateGlobalMinima }: MinimaControlsProps) {
   const [ceiling, setCeiling] = useState(globalMinima.ceiling.toString());
   const [vis, setVis] = useState(globalMinima.vis.toString());
+
+  // Update local state when global minima changes
+  useEffect(() => {
+    setCeiling(globalMinima.ceiling.toString());
+    setVis(globalMinima.vis.toString());
+  }, [globalMinima]);
 
   const handleApply = () => {
     const newMinima = {
@@ -28,7 +34,7 @@ export function MinimaControls({ globalMinima, onUpdateGlobalMinima }: MinimaCon
             type="number"
             value={ceiling}
             onChange={(e) => setCeiling(e.target.value)}
-            className="bg-gray-700 p-1 rounded w-20 text-center ml-1"
+            className="bg-gray-700 p-1 rounded w-20 text-center ml-1 transition-colors border border-gray-600 focus:outline-none focus:border-blue-400"
             min="0"
             step="100"
           />
@@ -40,7 +46,7 @@ export function MinimaControls({ globalMinima, onUpdateGlobalMinima }: MinimaCon
             value={vis}
             onChange={(e) => setVis(e.target.value)}
             step="0.1"
-            className="bg-gray-700 p-1 rounded w-20 text-center ml-1"
+            className="bg-gray-700 p-1 rounded w-20 text-center ml-1 transition-colors border border-gray-600 focus:outline-none focus:border-blue-400"
             min="0"
           />
         </label>
