@@ -16,7 +16,6 @@ const CACHE_DURATIONS = {
   TAF: 600000,      // 10 minutes
   PIREP: 120000,    // 2 minutes
   SIGMET: 300000,   // 5 minutes
-  AIRMET: 600000,   // 10 minutes
 };
 
 async function fetchWithCache(url: string, cacheKey: string, cacheDuration: number): Promise<any> {
@@ -85,20 +84,32 @@ export async function fetchPIREPs(icao: string, radiusNm: number = 50): Promise<
 
     if (!Array.isArray(data)) return [];
 
-    return data.map((pirep: any, index: number) => ({
-      id: pirep.pirepId || `pirep-${icao}-${index}`,
-      icao: pirep.icaoId || icao,
-      aircraft: pirep.aircraftRef || 'UNKNOWN',
-      altitude: pirep.altitudeFtMsl || 0,
-      turbulence: mapTurbulence(pirep.turbulence),
-      icing: mapIcing(pirep.icing),
-      timestamp: new Date(pirep.obsTime || Date.now()),
-      rawReport: pirep.rawOb || '',
-      location: {
-        lat: pirep.lat || 0,
-        lon: pirep.lon || 0
-      }
-    }));
+    const now = new Date();
+    const twelveHoursAgo = new Date(now.getTime() - 12 * 60 * 60 * 1000);
+
+    return data
+      .map((pirep: any, index: number) => {
+        const timestamp = new Date(pirep.obsTime || Date.now());
+        return {
+          id: pirep.pirepId || `pirep-${icao}-${index}`,
+          icao: pirep.icaoId || icao,
+          aircraft: pirep.aircraftRef || 'UNKNOWN',
+          altitude: pirep.altitudeFtMsl || 0,
+          turbulence: mapTurbulence(pirep.turbulence),
+          icing: mapIcing(pirep.icing),
+          timestamp,
+          rawReport: pirep.rawOb || '',
+          location: {
+            lat: pirep.lat || 0,
+            lon: pirep.lon || 0
+          },
+          isExpired: timestamp < twelveHoursAgo
+        };
+      })
+      .filter((pirep: PIREP) => {
+        // Only include PIREPs from last 12 hours
+        return pirep.timestamp >= twelveHoursAgo;
+      });
   } catch (error) {
     console.error(`Error fetching PIREPs for ${icao}:`, error);
     return [];
@@ -115,18 +126,37 @@ export async function fetchSIGMETs(icao: string, radiusNm: number = 100): Promis
 
     if (!Array.isArray(data)) return [];
 
-    return data.map((sigmet: any, index: number) => ({
-      id: sigmet.airsigmetId || `sigmet-${icao}-${index}`,
-      type: sigmet.airsigmetType || 'SIGMET',
-      hazard: mapHazard(sigmet.hazard),
-      severity: mapSeverity(sigmet.severity),
-      altitudeMin: sigmet.altitudeLowFt || 0,
-      altitudeMax: sigmet.altitudeHighFt || 60000,
-      validFrom: new Date(sigmet.validTimeFrom || Date.now()),
-      validTo: new Date(sigmet.validTimeTo || Date.now() + 6 * 60 * 60 * 1000),
-      affectedICAOs: [icao],
-      rawText: sigmet.rawAirsigmet || ''
-    }));
+    const now = new Date();
+    const twelveHoursAgo = new Date(now.getTime() - 12 * 60 * 60 * 1000);
+
+    return data
+      .map((sigmet: any, index: number) => {
+        const validFrom = new Date(sigmet.validTimeFrom || Date.now());
+        const validTo = new Date(sigmet.validTimeTo || Date.now() + 6 * 60 * 60 * 1000);
+        const isExpired = validTo < now;
+        const isActive = validFrom <= now && validTo >= now;
+        const isRecent = validFrom >= twelveHoursAgo || validTo >= now; // Recent or future
+
+        return {
+          id: sigmet.airsigmetId || `sigmet-${icao}-${index}`,
+          type: sigmet.airsigmetType || 'SIGMET',
+          hazard: mapHazard(sigmet.hazard),
+          severity: mapSeverity(sigmet.severity),
+          altitudeMin: sigmet.altitudeLowFt || 0,
+          altitudeMax: sigmet.altitudeHighFt || 60000,
+          validFrom,
+          validTo,
+          affectedICAOs: [icao],
+          rawText: sigmet.rawAirsigmet || '',
+          isExpired,
+          isActive
+        };
+      })
+      .filter((sigmet: SIGMET) => {
+        // Only include SIGMETs from last 12 hours or future ones
+        const isRecent = sigmet.validFrom >= twelveHoursAgo || sigmet.validTo >= now;
+        return isRecent;
+      });
   } catch (error) {
     console.error(`Error fetching SIGMETs for ${icao}:`, error);
     return [];
@@ -141,51 +171,46 @@ export async function fetchStationStatus(icao: string): Promise<StationStatus> {
       fetchSIGMETs(icao)
     ]);
 
-    // Calculate operational status based on real weather conditions
+    // Calculate operational status based on weather conditions only
     let operationalStatus: 'NORMAL' | 'CAUTION' | 'CRITICAL' = 'NORMAL';
-    let delayProbability = 0;
 
-    // Analyze weather conditions
     if (weatherData.error) {
       operationalStatus = 'CRITICAL';
-      delayProbability = 85;
     } else {
-      // Check for severe weather in SIGMETs
-      const severeSigmets = sigmets.filter(s => 
-        s.severity === 'SEVERE' || s.hazard === 'CONVECTIVE'
+      // Check for active severe weather in SIGMETs
+      const activeSevereSigmets = sigmets.filter(s => 
+        s.isActive && s.severity === 'SEVERE'
       );
       
-      // Check for severe turbulence/icing in PIREPs
+      // Check for severe conditions in PIREPs
       const severePireps = pireps.filter(p => 
-        p.turbulence === 'SEVERE' || p.icing === 'SEVERE'
+        !p.isExpired && (p.turbulence === 'SEVERE' || p.icing === 'SEVERE')
       );
 
-      if (severeSigmets.length > 0 || severePireps.length > 0) {
+      if (activeSevereSigmets.length > 0 || severePireps.length > 0) {
         operationalStatus = 'CRITICAL';
-        delayProbability = 70;
-      } else if (sigmets.length > 0 || pireps.some(p => p.turbulence === 'MODERATE' || p.icing === 'MODERATE')) {
+      } else if (
+        sigmets.some(s => s.isActive) || 
+        pireps.some(p => !p.isExpired && (p.turbulence === 'MODERATE' || p.icing === 'MODERATE'))
+      ) {
         operationalStatus = 'CAUTION';
-        delayProbability = 35;
       }
 
-      // Analyze METAR for low visibility/ceiling
+      // Analyze METAR for critical conditions
       if (weatherData.metar) {
         const metar = weatherData.metar.toLowerCase();
         
-        // Check for low visibility
+        // Check for very low visibility/ceiling
         const visMatch = metar.match(/(\d{1,2})sm/);
         const visibility = visMatch ? parseInt(visMatch[1]) : 10;
         
-        // Check for low ceiling
         const ceilingMatch = metar.match(/(ovc|bkn)(\d{3})/);
         const ceiling = ceilingMatch ? parseInt(ceilingMatch[2]) * 100 : 5000;
         
-        if (visibility < 1 || ceiling < 200) {
+        if (visibility < 0.5 || ceiling < 100) {
           operationalStatus = 'CRITICAL';
-          delayProbability = Math.max(delayProbability, 80);
-        } else if (visibility < 3 || ceiling < 500) {
+        } else if (visibility < 1 || ceiling < 200) {
           operationalStatus = operationalStatus === 'NORMAL' ? 'CAUTION' : operationalStatus;
-          delayProbability = Math.max(delayProbability, 45);
         }
       }
     }
@@ -197,7 +222,6 @@ export async function fetchStationStatus(icao: string): Promise<StationStatus> {
       pireps,
       sigmets,
       operationalStatus,
-      delayProbability,
       lastUpdated: new Date()
     };
   } catch (error) {
@@ -209,13 +233,12 @@ export async function fetchStationStatus(icao: string): Promise<StationStatus> {
       pireps: [],
       sigmets: [],
       operationalStatus: 'CRITICAL',
-      delayProbability: 90,
       lastUpdated: new Date()
     };
   }
 }
 
-// Helper functions for mapping API data
+// Helper functions remain the same...
 function mapTurbulence(turbulence: any): 'NONE' | 'LIGHT' | 'MODERATE' | 'SEVERE' {
   if (!turbulence) return 'NONE';
   const intensity = turbulence.intensity?.toLowerCase() || '';
@@ -295,30 +318,7 @@ function getAirportName(icao: string): string {
     'KPIT': 'Pittsburgh Intl',
     'KCLE': 'Cleveland Hopkins',
     'KIND': 'Indianapolis Intl',
-    'KMKE': 'Milwaukee Mitchell',
-    'KRIC': 'Richmond Intl',
-    'KRDU': 'Raleigh Durham',
-    'KGSO': 'Greensboro Piedmont',
-    'KAVL': 'Asheville Regional',
-    'KCHA': 'Chattanooga Metropolitan',
-    'KBHM': 'Birmingham Shuttlesworth',
-    'KHSV': 'Huntsville Intl',
-    'KMOB': 'Mobile Regional',
-    'KGPT': 'Gulfport Biloxi',
-    'KLIX': 'New Orleans Intl',
-    'KBTR': 'Baton Rouge Metropolitan',
-    'KSHV': 'Shreveport Regional',
-    'KTXK': 'Texarkana Regional',
-    'KLIT': 'Little Rock National',
-    'KXNA': 'Northwest Arkansas',
-    'KTUL': 'Tulsa Intl'
+    'KMKE': 'Milwaukee Mitchell'
   };
   return names[icao] || icao;
-}
-
-// Real flight data would come from your flight operations system
-export async function fetchFlights(): Promise<any[]> {
-  // This would integrate with your actual flight operations system
-  // For now, return empty array since we don't have access to flight data
-  return [];
 }
