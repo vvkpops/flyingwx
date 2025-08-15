@@ -1,15 +1,3 @@
-# Corrected Aviation Weather API Integration
-
-## Key Issues Found in Current Implementation:
-
-1. **Wrong Base URL** - Using old CGI endpoints instead of REST API
-2. **Incorrect Query Parameters** - Using `ids` instead of `stationString`
-3. **Missing Required Parameters** - Not using proper format specifications
-4. **Incorrect Response Handling** - Expecting JSON when we might get text
-
-## Corrected API Service (`lib/weatherApi.ts`)
-
-```typescript
 import { WeatherData, PIREP, SIGMET, StationStatus } from '../types/weather';
 
 // Correct Aviation Weather Center API endpoints
@@ -375,38 +363,3 @@ function getAirportName(icao: string): string {
   };
   return names[icao] || icao;
 }
-```
-
-## Key Corrections Made:
-
-### 1. **Correct API Endpoints:**
-- ✅ Using `/api/data/metar` instead of `/cgi-bin/data/metar.php`
-- ✅ Using `/api/data/taf` instead of `/cgi-bin/data/taf.php`
-- ✅ Using `/api/data/pirep` instead of old CGI endpoints
-- ✅ Using `/api/data/airsigmet` for weather warnings
-
-### 2. **Proper Query Parameters:**
-- ✅ `stationString=${icao}` instead of `ids=${icao}`
-- ✅ `format=json` for structured data
-- ✅ `hoursBeforeNow=12` for PIREPs time filtering
-- ✅ `hazard=convective,turbulence,icing,ifr` for specific SIGMET types
-
-### 3. **Enhanced Response Handling:**
-- ✅ Handle both JSON and text responses
-- ✅ Proper field mapping from API response objects
-- ✅ Robust error handling for missing fields
-- ✅ Better date/time parsing
-
-### 4. **Improved Data Processing:**
-- ✅ Enhanced METAR parsing for visibility/ceiling
-- ✅ Better condition mapping from API enums
-- ✅ Proper time-based filtering (12-hour window)
-- ✅ Active vs expired classification
-
-### 5. **API Parameters Used:**
-- **METAR**: `stationString`, `format=json`, `taf=false`, `hours=2`
-- **TAF**: `stationString`, `format=json`, `hours=8`
-- **PIREP**: `stationString`, `hoursBeforeNow=12`, `format=json`
-- **AIRSIGMET**: `stationString`, `format=json`, `hazard=convective,turbulence,icing,ifr`
-
-This corrected implementation properly uses the Aviation Weather Center's REST API according to their official specification!
