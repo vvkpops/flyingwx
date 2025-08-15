@@ -32,28 +32,10 @@ export function DispatcherWeatherTile({
     }
   };
 
-  const getDelayRiskColor = (risk: number) => {
-    if (risk >= 70) return 'text-red-400';
-    if (risk >= 40) return 'text-yellow-400';
-    if (risk >= 20) return 'text-orange-400';
-    return 'text-green-400';
-  };
-
-  // Get weather summary from METAR
-  const getWeatherSummary = (metar: string) => {
-    if (!metar) return 'No data';
-    
-    // Extract key info from METAR
-    const visMatch = metar.match(/(\d+)SM/);
-    const ceilingMatch = metar.match(/(OVC|BKN)(\d{3})/);
-    const windMatch = metar.match(/(\d{3})(\d{2,3})KT/);
-    
-    const visibility = visMatch ? `${visMatch[1]}SM` : '';
-    const ceiling = ceilingMatch ? `${ceilingMatch[1]}${parseInt(ceilingMatch[2]) * 100}` : '';
-    const wind = windMatch ? `${windMatch[1]}°/${windMatch[2]}kt` : '';
-    
-    return [visibility, ceiling, wind].filter(Boolean).join(' ') || metar.substring(0, 30) + '...';
-  };
+  // Count active vs expired items
+  const activePireps = station.pireps.filter(p => !p.isExpired).length;
+  const activeSigmets = station.sigmets.filter(s => s.isActive).length;
+  const expiredSigmets = station.sigmets.filter(s => s.isExpired).length;
 
   return (
     <div className={`flight-tile bg-gray-800 rounded-xl shadow-md p-4 border ${getStatusColor(station.operationalStatus)}`}>
@@ -77,53 +59,52 @@ export function DispatcherWeatherTile({
         <span className="text-2xl mr-2">{getStatusIcon(station.operationalStatus)}</span>
         <div className="text-center">
           <div className="font-semibold">{station.operationalStatus}</div>
-          <div className={`text-sm font-semibold ${getDelayRiskColor(station.delayProbability)}`}>
-            {station.delayProbability}% delay risk
-          </div>
+          <div className="text-xs text-gray-400">Operations Status</div>
         </div>
       </div>
 
-      {/* Weather Summary */}
-      {station.metar.metar && (
-        <div className="text-xs mb-2 bg-gray-700 rounded p-2">
-          <div className="text-gray-400 mb-1">Current:</div>
-          <div className="text-white">
-            {getWeatherSummary(station.metar.metar)}
+      {/* Full METAR Display */}
+      <div className="mb-3">
+        {station.metar.metar ? (
+          <div className="bg-gray-700 rounded p-2 text-xs">
+            <div className="text-blue-400 font-semibold mb-1">METAR:</div>
+            <div className="text-white font-mono leading-relaxed break-all">
+              {station.metar.metar}
+            </div>
           </div>
-        </div>
-      )}
+        ) : (
+          <div className="bg-red-900 rounded p-2 text-xs">
+            <div className="text-red-400 font-semibold">
+              {station.metar.error || 'No METAR data available'}
+            </div>
+          </div>
+        )}
+      </div>
 
-      {/* Alert Summary */}
+      {/* Weather Reports Summary */}
       <div className="flex justify-between text-xs mb-3">
         <div className="text-center">
-          <div className={`font-semibold ${station.pireps.length > 0 ? 'text-blue-400' : 'text-gray-500'}`}>
-            {station.pireps.length}
+          <div className={`font-semibold ${activePireps > 0 ? 'text-blue-400' : 'text-gray-500'}`}>
+            {activePireps}
           </div>
           <div className="text-gray-400">PIREPs</div>
+          <div className="text-xs text-gray-500">(12hr)</div>
         </div>
         <div className="text-center">
-          <div className={`font-semibold ${station.sigmets.length > 0 ? 'text-orange-400' : 'text-gray-500'}`}>
-            {station.sigmets.length}
+          <div className={`font-semibold ${activeSigmets > 0 ? 'text-orange-400' : 'text-gray-500'}`}>
+            {activeSigmets}
           </div>
-          <div className="text-gray-400">Warnings</div>
+          <div className="text-gray-400">Active</div>
+          <div className="text-xs text-gray-500">SIGMETs</div>
         </div>
         <div className="text-center">
-          <div className={`font-semibold ${
-            station.operationalStatus === 'CRITICAL' ? 'text-red-400' :
-            station.operationalStatus === 'CAUTION' ? 'text-yellow-400' : 'text-green-400'
-          }`}>
-            {station.operationalStatus === 'NORMAL' ? '0' : station.sigmets.filter(s => s.severity === 'SEVERE').length || '1'}
+          <div className={`font-semibold ${expiredSigmets > 0 ? 'text-gray-400' : 'text-gray-500'}`}>
+            {expiredSigmets}
           </div>
-          <div className="text-gray-400">Critical</div>
+          <div className="text-gray-400">Expired</div>
+          <div className="text-xs text-gray-500">SIGMETs</div>
         </div>
       </div>
-
-      {/* Error Display */}
-      {station.metar.error && (
-        <div className="text-xs text-red-400 mb-2 bg-red-900 rounded p-2">
-          Error: {station.metar.error}
-        </div>
-      )}
 
       {/* Actions */}
       <div className="flex gap-2">
