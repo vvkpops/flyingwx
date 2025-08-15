@@ -27,8 +27,13 @@ export function WeatherTile({
     highlightWeatherText(weatherData.taf, minima) : 
     { html: '', hasViolations: false };
 
-  const borderColor = weatherData?.error ? 'border-yellow-500' :
-    tafHighlight.hasViolations ? 'border-red-500' : 'border-green-500';
+  // Determine border color exactly like original
+  let borderColor = 'border-gray-700';
+  if (weatherData?.error) {
+    borderColor = 'border-yellow-500';
+  } else if (weatherData?.taf) {
+    borderColor = tafHighlight.hasViolations ? 'border-red-500' : 'border-green-500';
+  }
 
   return (
     <div className={`flight-tile bg-gray-800 rounded-xl shadow-md p-4 border ${borderColor}`}>
@@ -53,7 +58,7 @@ export function WeatherTile({
           <input
             type="number"
             value={minima.ceiling}
-            className="bg-gray-700 p-1 rounded w-20 text-center ml-1"
+            className="bg-gray-700 p-1 rounded w-20 text-center ml-1 transition-colors"
             onChange={(e) => onUpdateMinima(icao, 'ceiling', parseFloat(e.target.value) || 0)}
             min="0"
             step="100"
@@ -65,7 +70,7 @@ export function WeatherTile({
             type="number"
             value={minima.vis}
             step="0.1"
-            className="bg-gray-700 p-1 rounded w-20 text-center ml-1"
+            className="bg-gray-700 p-1 rounded w-20 text-center ml-1 transition-colors"
             onChange={(e) => onUpdateMinima(icao, 'vis', parseFloat(e.target.value) || 0)}
             min="0"
           />
