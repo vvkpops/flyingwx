@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Glassy, card style for weather tiles */
+/* Glassy, card style for weather tiles - exact match to original */
 .flight-tile {
   background: rgba(30,41,59,0.86);
   border-radius: 1.15rem;
@@ -22,12 +22,14 @@
   z-index: 4;
 }
 
+/* ICAO title styling - exact match */
 .flight-title {
   text-shadow: 0 1.5px 8px #0ea5e980, 0 1px 2px #0008;
   letter-spacing: .05em;
   color: #7dd3fc;
 }
 
+/* Remove button styling - exact match */
 .weather-remove-btn {
   position: absolute;
   top: 0.5rem;
@@ -60,6 +62,7 @@
   pointer-events: none;
 }
 
+/* Minima styling - exact match */
 .minima-default {
   opacity: 0.7;
   font-style: italic;
@@ -80,23 +83,42 @@
   color: #fff;
 }
 
+/* Responsive styling */
 @media (max-width: 640px) {
   .flight-tile {
     margin-bottom: 1.2rem;
   }
 }
 
-/* Additional base styles for proper rendering */
-body {
-  margin: 0;
-  padding: 0;
-}
-
-/* Input focus states to match original */
+/* Input focus states - exact match to original */
 input[type="text"]:focus, 
 input[type="number"]:focus {
   outline: none;
   border-color: #7dd3fc;
   background: #111827cc;
   color: #fff;
+}
+
+/* Button hover effects */
+button {
+  transition: all 0.2s ease-in-out;
+}
+
+/* Weather text highlighting - ensure proper colors */
+.text-red-400 {
+  color: #f87171 !important;
+}
+
+.font-bold {
+  font-weight: 700 !important;
+}
+
+/* TAF block styling */
+.taf-block {
+  line-height: 1.4;
+}
+
+.taf-block div {
+  margin: 0;
+  padding: 0;
 }
