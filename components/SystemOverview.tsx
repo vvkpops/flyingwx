@@ -11,9 +11,9 @@ export function SystemOverview({ stations }: SystemOverviewProps) {
     normalOps: 0,
     cautionStations: 0,
     criticalStations: 0,
-    avgDelayRisk: 0,
-    totalPireps: 0,
-    totalSigmets: 0
+    totalActivePireps: 0,
+    totalActiveSigmets: 0,
+    totalExpiredSigmets: 0
   });
 
   useEffect(() => {
@@ -21,20 +21,25 @@ export function SystemOverview({ stations }: SystemOverviewProps) {
     const normalOps = stations.filter(s => s.operationalStatus === 'NORMAL').length;
     const cautionStations = stations.filter(s => s.operationalStatus === 'CAUTION').length;
     const criticalStations = stations.filter(s => s.operationalStatus === 'CRITICAL').length;
-    const avgDelayRisk = totalStations > 0 
-      ? Math.round(stations.reduce((sum, s) => sum + s.delayProbability, 0) / totalStations)
-      : 0;
-    const totalPireps = stations.reduce((sum, s) => sum + s.pireps.length, 0);
-    const totalSigmets = stations.reduce((sum, s) => sum + s.sigmets.length, 0);
+    
+    const totalActivePireps = stations.reduce((sum, s) => 
+      sum + s.pireps.filter(p => !p.isExpired).length, 0
+    );
+    const totalActiveSigmets = stations.reduce((sum, s) => 
+      sum + s.sigmets.filter(sig => sig.isActive).length, 0
+    );
+    const totalExpiredSigmets = stations.reduce((sum, s) => 
+      sum + s.sigmets.filter(sig => sig.isExpired).length, 0
+    );
 
     setMetrics({
       totalStations,
       normalOps,
       cautionStations,
       criticalStations,
-      avgDelayRisk,
-      totalPireps,
-      totalSigmets
+      totalActivePireps,
+      totalActiveSigmets,
+      totalExpiredSigmets
     });
   }, [stations]);
 
@@ -76,7 +81,7 @@ export function SystemOverview({ stations }: SystemOverviewProps) {
         <MetricCard
           title="Normal Ops"
           value={metrics.normalOps}
-          subtitle={`${Math.round((metrics.normalOps / metrics.totalStations) * 100) || 0}%`}
+          subtitle={`${Math.round((metrics.normalOps / (metrics.totalStations || 1)) * 100)}%`}
           icon="✅"
           color="text-green-400"
         />
@@ -98,27 +103,27 @@ export function SystemOverview({ stations }: SystemOverviewProps) {
         />
         
         <MetricCard
-          title="Avg Delay Risk"
-          value={`${metrics.avgDelayRisk}%`}
-          subtitle="System wide"
-          icon="⏱️"
-          color="text-orange-400"
-        />
-        
-        <MetricCard
-          title="PIREPs"
-          value={metrics.totalPireps}
-          subtitle="Active reports"
+          title="Active PIREPs"
+          value={metrics.totalActivePireps}
+          subtitle="Last 12hrs"
           icon="🛩️"
           color="text-cyan-400"
         />
         
         <MetricCard
-          title="SIGMETs"
-          value={metrics.totalSigmets}
-          subtitle="Active warnings"
+          title="Active SIGMETs"
+          value={metrics.totalActiveSigmets}
+          subtitle="Current"
           icon="⚡"
           color="text-purple-400"
+        />
+        
+        <MetricCard
+          title="Expired"
+          value={metrics.totalExpiredSigmets}
+          subtitle="SIGMETs"
+          icon="⏰"
+          color="text-gray-400"
         />
       </div>
     </div>
