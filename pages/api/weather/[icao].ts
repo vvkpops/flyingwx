@@ -50,7 +50,7 @@ export default async function handler(
 
     // Try multiple data sources
     const weatherData = await fetchWeatherDataServer(icao);
-    
+
     // Cache the response
     cache.set(cacheKey, {
       data: weatherData,
@@ -70,13 +70,20 @@ export default async function handler(
   }
 }
 
+/**
+ * Robust fetcher that:
+ * - tries multiple sources
+ * - handles multiple JSON shapes
+ * - extracts probable raw text fields
+ * - ensures returned METAR includes the ICAO (prefixes it if necessary)
+ */
 async function fetchWeatherDataServer(icao: string): Promise<WeatherApiResponse> {
   const metarSources = [
-    // Direct Aviation Weather Center (no CORS on server-side)
+    // Direct Aviation Weather Center (server-side requests avoid CORS)
     `https://aviationweather.gov/api/data/metar?stationString=${icao}&format=json&hours=2&taf=false`,
     // NWS Direct Text
     `https://tgftp.nws.noaa.gov/data/observations/metar/stations/${icao}.TXT`,
-    // Backup CheckWX API (requires API key in production)
+    // CheckWX (fallback - requires API key for reliable responses in production)
     `https://api.checkwx.com/v1/metar/${icao}/decoded`
   ];
 
@@ -89,11 +96,44 @@ async function fetchWeatherDataServer(icao: string): Promise<WeatherApiResponse>
   let taf = '';
   let lastError: Error | null = null;
 
-  // Fetch METAR
+  // Helper: attempt to extract common raw fields from parsed JSON/object
+  function extractRawFromObject(obj: any): string | null {
+    if (!obj || typeof obj !== 'object') return null;
+
+    // Common possible fields across providers
+    const candidates = [
+      'raw_text', 'raw', 'raw_ob', 'rawOb', 'rawText', 'rawTAF', 'rawTAFText', 'text',
+      'rawMessage', 'raw_message', 'rawMETAR', 'obs', 'observation', 'rawOb'
+    ];
+
+    for (const k of candidates) {
+      if (typeof obj[k] === 'string' && obj[k].trim().length > 0) {
+        return obj[k].trim();
+      }
+    }
+
+    // Some providers nest data under properties e.g. feature.properties.rawMessage
+    if (obj.properties && typeof obj.properties === 'object') {
+      return extractRawFromObject(obj.properties);
+    }
+
+    // Some return station_id + raw_text separately; build if present
+    if (obj.station_id || obj.station || obj.stationId) {
+      const stationId = String(obj.station_id || obj.station || obj.stationId).trim();
+      const rawText = (obj.raw_text || obj.raw || obj.text || '') as string;
+      if (rawText && rawText.trim().length > 0) {
+        return `${stationId} ${rawText.trim()}`;
+      }
+    }
+
+    return null;
+  }
+
+  // Try METAR sources
   for (const url of metarSources) {
     try {
       console.log(`Trying METAR source: ${url}`);
-      
+
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000);
 
@@ -111,34 +151,69 @@ async function fetchWeatherDataServer(icao: string): Promise<WeatherApiResponse>
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
-      const responseText = await response.text();
-      
-      if (!responseText || responseText.includes('not found') || responseText.length < 10) {
-        throw new Error('No data available');
-      }
+      const contentType = response.headers.get('content-type') || '';
 
-      // Parse response based on content type
-      if (response.headers.get('content-type')?.includes('application/json')) {
-        try {
-          const jsonData = JSON.parse(responseText);
-          if (Array.isArray(jsonData) && jsonData.length > 0) {
-            metar = jsonData[0].rawOb || jsonData[0].raw || '';
-          }
-        } catch (e) {
-          throw new Error('Invalid JSON response');
-        }
-      } else {
-        // Handle plain text responses (NWS format)
+      // TEXT response (NWS)
+      if (contentType.includes('text') || contentType.includes('plain')) {
+        const responseText = await response.text();
         const lines = responseText.split('\n').filter(line => line.trim());
         if (lines.length > 0) {
-          // For NWS files, the METAR is typically on the second line after timestamp
+          // For NWS TXT, the METAR is usually on line 2
           metar = lines.length > 1 ? lines[1].trim() : lines[0].trim();
+        }
+      } else {
+        // Try JSON parsing and robust extraction
+        const responseText = await response.text();
+        if (!responseText) {
+          throw new Error('Empty response from source');
+        }
+
+        let parsed: any;
+        try {
+          parsed = JSON.parse(responseText);
+        } catch (e) {
+          // Not JSON - fall back to raw text
+          if (responseText && responseText.trim().length > 0) {
+            metar = responseText.trim();
+          } else {
+            throw new Error('Invalid JSON and empty text response');
+          }
+        }
+
+        if (parsed) {
+          // Many providers wrap results in arrays or `data` properties
+          let candidate: any = null;
+
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            candidate = parsed[0];
+          } else if (parsed.data && Array.isArray(parsed.data) && parsed.data.length > 0) {
+            candidate = parsed.data[0];
+          } else if (parsed.features && Array.isArray(parsed.features) && parsed.features.length > 0) {
+            // GeoJSON style
+            candidate = parsed.features[0];
+          } else if (parsed.response && parsed.response.data && Array.isArray(parsed.response.data) && parsed.response.data.length > 0) {
+            candidate = parsed.response.data[0];
+          } else {
+            candidate = parsed;
+          }
+
+          const raw = extractRawFromObject(candidate);
+          if (raw) {
+            metar = raw;
+          } else if (typeof candidate === 'string' && candidate.trim().length > 0) {
+            metar = candidate.trim();
+          }
         }
       }
 
       if (metar) {
-        console.log(`Got METAR from ${url}: ${metar.substring(0, 50)}...`);
-        break; // Success, stop trying other sources
+        metar = cleanWeatherText(metar);
+        // Ensure the returned METAR string contains the ICAO; if not, prefix it.
+        if (!metar.includes(icao)) {
+          metar = `${icao} ${metar}`.trim();
+        }
+        console.log(`Got METAR from ${url}: ${metar.substring(0, 80)}`);
+        break;
       }
 
     } catch (error) {
@@ -148,11 +223,11 @@ async function fetchWeatherDataServer(icao: string): Promise<WeatherApiResponse>
     }
   }
 
-  // Fetch TAF
+  // Try TAF sources
   for (const url of tafSources) {
     try {
       console.log(`Trying TAF source: ${url}`);
-      
+
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000);
 
@@ -170,34 +245,65 @@ async function fetchWeatherDataServer(icao: string): Promise<WeatherApiResponse>
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
-      const responseText = await response.text();
-      
-      if (!responseText || responseText.includes('not found') || responseText.length < 10) {
-        throw new Error('No TAF data available');
-      }
+      const contentType = response.headers.get('content-type') || '';
 
-      // Parse response based on content type
-      if (response.headers.get('content-type')?.includes('application/json')) {
-        try {
-          const jsonData = JSON.parse(responseText);
-          if (Array.isArray(jsonData) && jsonData.length > 0) {
-            taf = jsonData[0].rawTAF || jsonData[0].raw || '';
-          }
-        } catch (e) {
-          throw new Error('Invalid JSON response');
-        }
-      } else {
-        // Handle plain text responses (NWS format)
+      if (contentType.includes('text') || contentType.includes('plain')) {
+        const responseText = await response.text();
         const lines = responseText.split('\n').filter(line => line.trim());
         if (lines.length > 0) {
-          // For NWS TAF files, skip timestamp and get the TAF content
           taf = lines.length > 1 ? lines.slice(1).join('\n').trim() : lines[0].trim();
+        }
+      } else {
+        const responseText = await response.text();
+        if (!responseText) {
+          throw new Error('Empty TAF response');
+        }
+
+        let parsed: any;
+        try {
+          parsed = JSON.parse(responseText);
+        } catch (e) {
+          // If not JSON, use raw text
+          if (responseText && responseText.trim().length > 0) {
+            taf = responseText.trim();
+          } else {
+            throw new Error('Invalid JSON and empty text response for TAF');
+          }
+        }
+
+        if (parsed) {
+          let candidate: any = null;
+
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            candidate = parsed[0];
+          } else if (parsed.data && Array.isArray(parsed.data) && parsed.data.length > 0) {
+            candidate = parsed.data[0];
+          } else if (parsed.features && Array.isArray(parsed.features) && parsed.features.length > 0) {
+            candidate = parsed.features[0];
+          } else {
+            candidate = parsed;
+          }
+
+          // Several TAF providers put text under rawTAF, raw_text, raw, etc.
+          const raw = (candidate && (candidate.rawTAF || candidate.raw_taf || candidate.raw_text || candidate.raw || candidate.text)) || null;
+          if (typeof raw === 'string' && raw.trim().length > 0) {
+            taf = raw.trim();
+          } else {
+            // fallback to generic extractor
+            const extracted = (candidate && (candidate.raw_text || candidate.raw || candidate.text)) ? String(candidate.raw_text || candidate.raw || candidate.text) : null;
+            if (extracted) taf = extracted.trim();
+          }
         }
       }
 
       if (taf) {
-        console.log(`Got TAF from ${url}: ${taf.substring(0, 50)}...`);
-        break; // Success, stop trying other sources
+        taf = cleanWeatherText(taf);
+        // Ensure TAF contains ICAO if reasonable
+        if (!taf.includes(icao)) {
+          taf = `${icao} ${taf}`.trim();
+        }
+        console.log(`Got TAF from ${url}: ${taf.substring(0, 80)}`);
+        break;
       }
 
     } catch (error) {
@@ -207,11 +313,7 @@ async function fetchWeatherDataServer(icao: string): Promise<WeatherApiResponse>
     }
   }
 
-  // Clean up the weather text
-  metar = cleanWeatherText(metar);
-  taf = cleanWeatherText(taf);
-
-  // If we didn't get any data at all, throw error
+  // If nothing was found at all, surface lastError
   if (!metar && !taf) {
     throw lastError || new Error(`No weather data available for ${icao}`);
   }
@@ -221,16 +323,16 @@ async function fetchWeatherDataServer(icao: string): Promise<WeatherApiResponse>
 
 function cleanWeatherText(text: string): string {
   if (!text) return '';
-  
-  // Remove extra whitespace and normalize
-  let cleaned = text.replace(/\s+/g, ' ').trim();
-  
-  // Remove common prefixes/suffixes that aren't part of the actual report
-  cleaned = cleaned.replace(/^(METAR|TAF|SPECI)\s+/, '');
-  cleaned = cleaned.replace(/\s+(METAR|TAF|SPECI)$/, '');
-  
-  // Remove timestamp lines that might be included
-  cleaned = cleaned.replace(/^\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}\s*/, '');
-  
+
+  // Collapse and normalize whitespace
+  let cleaned = text.replace(/\r\n/g, '\n').replace(/\t/g, ' ').replace(/\s+/g, ' ').trim();
+
+  // Remove common labels but avoid removing the ICAO
+  cleaned = cleaned.replace(/^(METAR|TAF|SPECI)\s+/i, '');
+  cleaned = cleaned.replace(/\s+(METAR|TAF|SPECI)$/i, '');
+
+  // Remove obvious timestamp lines like YYYY/MM/DD HH:MM at the start
+  cleaned = cleaned.replace(/^\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}\s*/i, '');
+
   return cleaned;
 }
