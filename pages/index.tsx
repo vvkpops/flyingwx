@@ -16,58 +16,61 @@ export default function WeatherMonitor() {
   const [weatherData, setWeatherData] = useState<Record<string, WeatherData>>({});
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const [isLoading, setIsLoading] = useState(false);
+  const [isClient, setIsClient] = useState(false);
 
-  // Load data from localStorage on mount
+  // Handle hydration - only run on client side
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const savedICAOs = localStorage.getItem('weatherICAOs');
-      const savedGlobalMinima = localStorage.getItem('globalWeatherMinima');
-      const savedIndividualMinima = localStorage.getItem('weatherMinima');
-
-      if (savedICAOs) {
-        try {
-          setWeatherICAOs(JSON.parse(savedICAOs));
-        } catch (e) {
-          console.error('Error parsing saved ICAOs:', e);
-        }
-      }
-
-      if (savedGlobalMinima) {
-        try {
-          setGlobalMinima(JSON.parse(savedGlobalMinima));
-        } catch (e) {
-          console.error('Error parsing saved global minima:', e);
-        }
-      }
-
-      if (savedIndividualMinima) {
-        try {
-          setIndividualMinima(JSON.parse(savedIndividualMinima));
-        } catch (e) {
-          console.error('Error parsing saved individual minima:', e);
-        }
-      }
-    }
+    setIsClient(true);
   }, []);
 
-  // Save to localStorage when data changes
+  // Load data from localStorage only after hydration
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('weatherICAOs', JSON.stringify(weatherICAOs));
+    if (!isClient) return;
+
+    const savedICAOs = localStorage.getItem('weatherICAOs');
+    const savedGlobalMinima = localStorage.getItem('globalWeatherMinima');
+    const savedIndividualMinima = localStorage.getItem('weatherMinima');
+
+    if (savedICAOs) {
+      try {
+        setWeatherICAOs(JSON.parse(savedICAOs));
+      } catch (e) {
+        console.error('Error parsing saved ICAOs:', e);
+      }
     }
-  }, [weatherICAOs]);
+
+    if (savedGlobalMinima) {
+      try {
+        setGlobalMinima(JSON.parse(savedGlobalMinima));
+      } catch (e) {
+        console.error('Error parsing saved global minima:', e);
+      }
+    }
+
+    if (savedIndividualMinima) {
+      try {
+        setIndividualMinima(JSON.parse(savedIndividualMinima));
+      } catch (e) {
+        console.error('Error parsing saved individual minima:', e);
+      }
+    }
+  }, [isClient]);
+
+  // Save to localStorage when data changes (only on client)
+  useEffect(() => {
+    if (!isClient) return;
+    localStorage.setItem('weatherICAOs', JSON.stringify(weatherICAOs));
+  }, [weatherICAOs, isClient]);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('globalWeatherMinima', JSON.stringify(globalMinima));
-    }
-  }, [globalMinima]);
+    if (!isClient) return;
+    localStorage.setItem('globalWeatherMinima', JSON.stringify(globalMinima));
+  }, [globalMinima, isClient]);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('weatherMinima', JSON.stringify(individualMinima));
-    }
-  }, [individualMinima]);
+    if (!isClient) return;
+    localStorage.setItem('weatherMinima', JSON.stringify(individualMinima));
+  }, [individualMinima, isClient]);
 
   // Fetch weather data for all ICAOs
   const updateWeatherData = useCallback(async () => {
@@ -100,14 +103,16 @@ export default function WeatherMonitor() {
 
   // Update weather data when ICAOs change
   useEffect(() => {
+    if (!isClient) return;
     updateWeatherData();
-  }, [updateWeatherData]);
+  }, [updateWeatherData, isClient]);
 
   // Auto-refresh every 5 minutes
   useEffect(() => {
+    if (!isClient) return;
     const interval = setInterval(updateWeatherData, 5 * 60 * 1000);
     return () => clearInterval(interval);
-  }, [updateWeatherData]);
+  }, [updateWeatherData, isClient]);
 
   const addICAOs = useCallback((icaos: string[]) => {
     const validICAOs = icaos.filter(icao => 
@@ -157,6 +162,26 @@ export default function WeatherMonitor() {
       return newMinima;
     });
   }, []);
+
+  // Don't render until hydrated
+  if (!isClient) {
+    return (
+      <>
+        <Head>
+          <title>Weather Monitor</title>
+          <meta name="description" content="Aviation Weather Monitor Dashboard" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <link rel="icon" href="/favicon.ico" />
+        </Head>
+        <div className="min-h-screen bg-gray-900 text-gray-200 font-sans flex items-center justify-center">
+          <div className="text-center">
+            <div className="text-2xl font-bold mb-4">Weather Monitor</div>
+            <div className="text-gray-400">Loading...</div>
+          </div>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
