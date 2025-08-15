@@ -1,6 +1,6 @@
 import { WeatherData, PIREP, SIGMET, StationStatus } from '../types/weather';
 
-// Correct Aviation Weather Center API endpoints
+// Aviation Weather Center API endpoints
 const BASE_URL = 'https://aviationweather.gov/api/data';
 const CORS_PROXY = 'https://corsproxy.io/?';
 
@@ -32,14 +32,22 @@ async function fetchWithCache(url: string, cacheKey: string, cacheDuration: numb
       throw new Error(`HTTP error! status: ${response.status}`);
     }
     
-    const contentType = response.headers.get('content-type');
-    let data;
+    const responseText = await response.text();
     
-    // Handle both JSON and text responses
-    if (contentType && contentType.includes('application/json')) {
-      data = await response.json();
-    } else {
-      data = await response.text();
+    // Check if response is an error message
+    if (responseText.startsWith('error') || responseText.includes('error')) {
+      console.warn(`API returned error for ${cacheKey}: ${responseText}`);
+      return null;
+    }
+    
+    let data;
+    try {
+      // Try to parse as JSON
+      data = JSON.parse(responseText);
+    } catch (jsonError) {
+      // If JSON parsing fails, return the text as is
+      console.warn(`Failed to parse JSON for ${cacheKey}, returning text:`, responseText);
+      data = responseText;
     }
     
     cache[cacheKey] = {
@@ -50,7 +58,7 @@ async function fetchWithCache(url: string, cacheKey: string, cacheDuration: numb
     return data;
   } catch (error) {
     console.error(`Error fetching ${cacheKey}:`, error);
-    throw error;
+    return null;
   }
 }
 
@@ -60,30 +68,53 @@ export async function fetchWeatherData(icao: string): Promise<WeatherData> {
   }
 
   try {
-    // Using correct REST API endpoints with proper parameters
+    // Try multiple API endpoints for better reliability
     const [metarData, tafData] = await Promise.all([
       fetchWithCache(
         `${BASE_URL}/metar?stationString=${icao}&format=json&taf=false&hours=2`,
         `metar-${icao}`,
         CACHE_DURATIONS.METAR
+      ).catch(() => 
+        // Fallback to text format if JSON fails
+        fetchWithCache(
+          `${BASE_URL}/metar?stationString=${icao}&format=raw&hours=2`,
+          `metar-text-${icao}`,
+          CACHE_DURATIONS.METAR
+        )
       ),
       fetchWithCache(
         `${BASE_URL}/taf?stationString=${icao}&format=json&hours=8`,
         `taf-${icao}`,
         CACHE_DURATIONS.TAF
+      ).catch(() =>
+        // Fallback to text format if JSON fails
+        fetchWithCache(
+          `${BASE_URL}/taf?stationString=${icao}&format=raw&hours=8`,
+          `taf-text-${icao}`,
+          CACHE_DURATIONS.TAF
+        )
       )
     ]);
 
-    // Handle response format - API returns array of objects
     let metar = '';
     let taf = '';
 
-    if (Array.isArray(metarData) && metarData.length > 0) {
-      metar = metarData[0].rawOb || metarData[0].raw || '';
+    // Handle METAR response
+    if (metarData) {
+      if (Array.isArray(metarData) && metarData.length > 0) {
+        metar = metarData[0].rawOb || metarData[0].raw || '';
+      } else if (typeof metarData === 'string') {
+        metar = metarData;
+      }
     }
 
-    if (Array.isArray(tafData) && tafData.length > 0) {
-      taf = tafData[0].rawTAF || tafData[0].raw || '';
+    // Handle TAF response
+    if (tafData) {
+      if (Array.isArray(tafData) && tafData.length > 0) {
+        taf = tafData[0].rawTAF || tafData[0].raw || '';
+      } else if (typeof tafData === 'string') {
+        taf = tafData;
+      }
     }
 
     return { metar, taf };
@@ -95,33 +126,39 @@ export async function fetchWeatherData(icao: string): Promise<WeatherData> {
 
 export async function fetchPIREPs(icao: string, radiusNm: number = 50): Promise<PIREP[]> {
   try {
-    // Correct PIREP endpoint with proper parameters
     const data = await fetchWithCache(
       `${BASE_URL}/pirep?stationString=${icao}&hoursBeforeNow=12&format=json`,
       `pirep-${icao}-${radiusNm}`,
       CACHE_DURATIONS.PIREP
     );
 
-    if (!Array.isArray(data)) return [];
+    if (!data || !Array.isArray(data)) return [];
 
     const now = new Date();
     const twelveHoursAgo = new Date(now.getTime() - 12 * 60 * 60 * 1000);
 
     return data
       .map((pirep: any, index: number) => {
-        const timestamp = new Date(pirep.reportTime || pirep.obsTime || Date.now());
+        // Safely parse timestamp
+        let timestamp = new Date();
+        try {
+          timestamp = new Date(pirep.reportTime || pirep.obsTime || Date.now());
+        } catch (e) {
+          console.warn(`Invalid timestamp for PIREP ${index}:`, pirep.reportTime || pirep.obsTime);
+        }
+
         return {
           id: pirep.reportId || `pirep-${icao}-${index}`,
           icao: pirep.stationId || icao,
           aircraft: pirep.aircraftRef || 'UNKNOWN',
-          altitude: parseInt(pirep.altitude) || 0,
+          altitude: safeParseInt(pirep.altitude),
           turbulence: mapTurbulenceIntensity(pirep.turbulenceCondition),
           icing: mapIcingIntensity(pirep.icingCondition),
           timestamp,
           rawReport: pirep.rawOb || pirep.pirepText || '',
           location: {
-            lat: parseFloat(pirep.latitude) || 0,
-            lon: parseFloat(pirep.longitude) || 0
+            lat: safeParseFloat(pirep.latitude),
+            lon: safeParseFloat(pirep.longitude)
           },
           isExpired: timestamp < twelveHoursAgo
         };
@@ -135,22 +172,30 @@ export async function fetchPIREPs(icao: string, radiusNm: number = 50): Promise<
 
 export async function fetchSIGMETs(icao: string, radiusNm: number = 100): Promise<SIGMET[]> {
   try {
-    // Correct SIGMET/AIRMET endpoint
     const data = await fetchWithCache(
-      `${BASE_URL}/airsigmet?stationString=${icao}&format=json&hazard=convective,turbulence,icing,ifr`,
+      `${BASE_URL}/airsigmet?stationString=${icao}&format=json`,
       `sigmet-${icao}-${radiusNm}`,
       CACHE_DURATIONS.SIGMET
     );
 
-    if (!Array.isArray(data)) return [];
+    if (!data || !Array.isArray(data)) return [];
 
     const now = new Date();
     const twelveHoursAgo = new Date(now.getTime() - 12 * 60 * 60 * 1000);
 
     return data
       .map((sigmet: any, index: number) => {
-        const validFrom = new Date(sigmet.validTimeFrom || Date.now());
-        const validTo = new Date(sigmet.validTimeTo || Date.now() + 6 * 60 * 60 * 1000);
+        // Safely parse timestamps
+        let validFrom = new Date();
+        let validTo = new Date(Date.now() + 6 * 60 * 60 * 1000);
+        
+        try {
+          validFrom = new Date(sigmet.validTimeFrom || Date.now());
+          validTo = new Date(sigmet.validTimeTo || Date.now() + 6 * 60 * 60 * 1000);
+        } catch (e) {
+          console.warn(`Invalid timestamps for SIGMET ${index}:`, sigmet.validTimeFrom, sigmet.validTimeTo);
+        }
+
         const isExpired = validTo < now;
         const isActive = validFrom <= now && validTo >= now;
 
@@ -159,8 +204,8 @@ export async function fetchSIGMETs(icao: string, radiusNm: number = 100): Promis
           type: sigmet.hazardType || 'AIRMET',
           hazard: mapHazardType(sigmet.hazard),
           severity: mapSeverityLevel(sigmet.severity || sigmet.hazard),
-          altitudeMin: parseInt(sigmet.altitudeLow) || 0,
-          altitudeMax: parseInt(sigmet.altitudeHigh) || 60000,
+          altitudeMin: safeParseInt(sigmet.altitudeLow),
+          altitudeMax: safeParseInt(sigmet.altitudeHigh, 60000),
           validFrom,
           validTo,
           affectedICAOs: [icao],
@@ -170,7 +215,6 @@ export async function fetchSIGMETs(icao: string, radiusNm: number = 100): Promis
         };
       })
       .filter((sigmet: SIGMET) => {
-        // Only include SIGMETs from last 12 hours or future ones
         return sigmet.validFrom >= twelveHoursAgo || sigmet.validTo >= now;
       });
   } catch (error) {
@@ -247,11 +291,29 @@ export async function fetchStationStatus(icao: string): Promise<StationStatus> {
   }
 }
 
+// Safe parsing helper functions
+function safeParseInt(value: any, defaultValue: number = 0): number {
+  if (value === null || value === undefined) return defaultValue;
+  const parsed = parseInt(String(value));
+  return isNaN(parsed) ? defaultValue : parsed;
+}
+
+function safeParseFloat(value: any, defaultValue: number = 0): number {
+  if (value === null || value === undefined) return defaultValue;
+  const parsed = parseFloat(String(value));
+  return isNaN(parsed) ? defaultValue : parsed;
+}
+
+function safeToLowerCase(value: any): string {
+  if (value === null || value === undefined) return '';
+  return String(value).toLowerCase();
+}
+
 // Helper functions for mapping API responses to our types
 function mapTurbulenceIntensity(condition: any): 'NONE' | 'LIGHT' | 'MODERATE' | 'SEVERE' {
   if (!condition) return 'NONE';
   
-  const intensity = (condition.intensity || condition.type || '').toLowerCase();
+  const intensity = safeToLowerCase(condition.intensity || condition.type || condition);
   
   if (intensity.includes('severe') || intensity.includes('extreme')) return 'SEVERE';
   if (intensity.includes('moderate')) return 'MODERATE';
@@ -263,7 +325,7 @@ function mapTurbulenceIntensity(condition: any): 'NONE' | 'LIGHT' | 'MODERATE' |
 function mapIcingIntensity(condition: any): 'NONE' | 'TRACE' | 'LIGHT' | 'MODERATE' | 'SEVERE' {
   if (!condition) return 'NONE';
   
-  const intensity = (condition.intensity || condition.type || '').toLowerCase();
+  const intensity = safeToLowerCase(condition.intensity || condition.type || condition);
   
   if (intensity.includes('severe') || intensity.includes('heavy')) return 'SEVERE';
   if (intensity.includes('moderate')) return 'MODERATE';
@@ -276,7 +338,7 @@ function mapIcingIntensity(condition: any): 'NONE' | 'TRACE' | 'LIGHT' | 'MODERA
 function mapHazardType(hazard: any): 'TURB' | 'ICE' | 'IFR' | 'MT_OBSC' | 'CONVECTIVE' {
   if (!hazard) return 'TURB';
   
-  const h = hazard.toLowerCase();
+  const h = safeToLowerCase(hazard);
   
   if (h.includes('turbulence') || h.includes('turb')) return 'TURB';
   if (h.includes('icing') || h.includes('ice')) return 'ICE';
@@ -290,7 +352,7 @@ function mapHazardType(hazard: any): 'TURB' | 'ICE' | 'IFR' | 'MT_OBSC' | 'CONVE
 function mapSeverityLevel(severity: any): 'LIGHT' | 'MODERATE' | 'SEVERE' {
   if (!severity) return 'MODERATE';
   
-  const s = severity.toLowerCase();
+  const s = safeToLowerCase(severity);
   
   if (s.includes('severe') || s.includes('extreme') || s.includes('strong')) return 'SEVERE';
   if (s.includes('light') || s.includes('weak') || s.includes('mild')) return 'LIGHT';
@@ -302,22 +364,32 @@ function parseMetarConditions(metar: string): { visibility: number; ceiling: num
   let visibility = 10; // Default good visibility
   let ceiling = 5000;  // Default high ceiling
   
+  if (!metar || typeof metar !== 'string') return { visibility, ceiling };
+  
   // Parse visibility in statute miles
   const visMatch = metar.match(/(\d+(?:\s+\d+\/\d+)?|\d+\/\d+)SM/);
   if (visMatch) {
     const visStr = visMatch[1].replace(/\s+/g, '');
     if (visStr.includes('/')) {
       const [num, den] = visStr.split('/').map(Number);
-      visibility = num / den;
+      if (den && den !== 0) {
+        visibility = num / den;
+      }
     } else {
-      visibility = parseInt(visStr);
+      const parsed = parseInt(visStr);
+      if (!isNaN(parsed)) {
+        visibility = parsed;
+      }
     }
   }
   
   // Parse ceiling from cloud layers
   const ceilingMatch = metar.match(/(BKN|OVC)(\d{3})/);
   if (ceilingMatch) {
-    ceiling = parseInt(ceilingMatch[2]) * 100;
+    const parsed = parseInt(ceilingMatch[2]);
+    if (!isNaN(parsed)) {
+      ceiling = parsed * 100;
+    }
   }
   
   return { visibility, ceiling };
@@ -326,6 +398,12 @@ function parseMetarConditions(metar: string): { visibility: number; ceiling: num
 function getAirportName(icao: string): string {
   const names: Record<string, string> = {
     'CYYT': 'St. John\'s Intl',
+    'CYWK': 'Wabush',
+    'CYQM': 'Moncton',
+    'CYQX': 'Gander Intl',
+    'CYHZ': 'Halifax Stanfield',
+    'CYYR': 'Goose Bay',
+    'CYDF': 'Deer Lake',
     'KJFK': 'John F Kennedy Intl',
     'EGLL': 'London Heathrow',
     'KORD': 'Chicago O\'Hare',
