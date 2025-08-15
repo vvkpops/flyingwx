@@ -5,13 +5,13 @@ export function parseWeatherLine(line: string): ParsedWeatherConditions {
   let visMiles = Infinity;
   let isGreater = false;
 
-  // Parse cloud ceiling (BKN, OVC, VV)
+  // Parse cloud ceiling (BKN, OVC, VV) - exactly like original
   const cloudMatch = line.match(/(BKN|OVC|VV)(\d{3})/);
   if (cloudMatch) {
     ceiling = parseInt(cloudMatch[2], 10) * 100;
   }
 
-  // Parse visibility
+  // Parse visibility - exactly like original
   const visMatch = line.match(/(P?\d{1,2})SM/);
   if (visMatch) {
     if (visMatch[1].startsWith('P')) {
@@ -34,24 +34,35 @@ export function checkConditionsAgainstMinima(
   return visOk && ceilOk;
 }
 
+// Fixed to exactly match original highlighting logic
 export function highlightWeatherText(
   rawText: string,
   minima: Minima
 ): { html: string; hasViolations: boolean } {
+  if (!rawText.trim()) {
+    return { html: '', hasViolations: false };
+  }
+
   const lines = rawText.split('\n');
   let hasViolations = false;
 
   const html = lines
     .map(line => {
-      const conditions = parseWeatherLine(line);
+      const trimmedLine = line.trim();
+      if (!trimmedLine) {
+        return '<div></div>';
+      }
+
+      const conditions = parseWeatherLine(trimmedLine);
       const meetsMinima = checkConditionsAgainstMinima(conditions, minima);
       
-      if (!meetsMinima && line.trim()) {
+      // If conditions don't meet minima AND it's not infinity (meaning we found actual weather data)
+      if (!meetsMinima && (conditions.ceiling !== Infinity || conditions.visMiles !== Infinity)) {
         hasViolations = true;
-        return `<div class="text-red-400 font-bold">${line}</div>`;
+        return `<div class="text-red-400 font-bold">${trimmedLine}</div>`;
       }
       
-      return `<div>${line}</div>`;
+      return `<div>${trimmedLine}</div>`;
     })
     .join('');
 
