@@ -37,6 +37,11 @@ export function DispatcherWeatherTile({
   const activeSigmets = station.sigmets.filter(s => s.isActive).length;
   const expiredSigmets = station.sigmets.filter(s => s.isExpired).length;
 
+  // Verify the METAR data belongs to this station
+  const isMetarValid = station.metar.metar ? station.metar.metar.includes(station.icao) : false;
+  const displayMetar = isMetarValid ? station.metar.metar : '';
+  const displayError = isMetarValid ? station.metar.error : `Data mismatch for ${station.icao}`;
+
   return (
     <div className={`flight-tile bg-gray-800 rounded-xl shadow-md p-4 border ${getStatusColor(station.operationalStatus)}`}>
       <button
@@ -65,18 +70,23 @@ export function DispatcherWeatherTile({
 
       {/* Full METAR Display */}
       <div className="mb-3">
-        {station.metar.metar ? (
+        {displayMetar ? (
           <div className="bg-gray-700 rounded p-2 text-xs">
             <div className="text-blue-400 font-semibold mb-1">METAR:</div>
             <div className="text-white font-mono leading-relaxed break-all">
-              {station.metar.metar}
+              {displayMetar}
             </div>
           </div>
         ) : (
           <div className="bg-red-900 rounded p-2 text-xs">
             <div className="text-red-400 font-semibold">
-              {station.metar.error || 'No METAR data available'}
+              {displayError || 'No METAR data available'}
             </div>
+            {!isMetarValid && station.metar.metar && (
+              <div className="text-yellow-400 mt-1">
+                METAR data does not match station {station.icao}
+              </div>
+            )}
           </div>
         )}
       </div>
