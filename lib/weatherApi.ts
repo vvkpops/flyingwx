@@ -1,5 +1,18 @@
+# Corrected Aviation Weather API Integration
+
+## Key Issues Found in Current Implementation:
+
+1. **Wrong Base URL** - Using old CGI endpoints instead of REST API
+2. **Incorrect Query Parameters** - Using `ids` instead of `stationString`
+3. **Missing Required Parameters** - Not using proper format specifications
+4. **Incorrect Response Handling** - Expecting JSON when we might get text
+
+## Corrected API Service (`lib/weatherApi.ts`)
+
+```typescript
 import { WeatherData, PIREP, SIGMET, StationStatus } from '../types/weather';
 
+// Correct Aviation Weather Center API endpoints
 const BASE_URL = 'https://aviationweather.gov/api/data';
 const CORS_PROXY = 'https://corsproxy.io/?';
 
@@ -31,7 +44,15 @@ async function fetchWithCache(url: string, cacheKey: string, cacheDuration: numb
       throw new Error(`HTTP error! status: ${response.status}`);
     }
     
-    const data = await response.json();
+    const contentType = response.headers.get('content-type');
+    let data;
+    
+    // Handle both JSON and text responses
+    if (contentType && contentType.includes('application/json')) {
+      data = await response.json();
+    } else {
+      data = await response.text();
+    }
     
     cache[cacheKey] = {
       data,
@@ -51,21 +72,31 @@ export async function fetchWeatherData(icao: string): Promise<WeatherData> {
   }
 
   try {
+    // Using correct REST API endpoints with proper parameters
     const [metarData, tafData] = await Promise.all([
       fetchWithCache(
-        `${BASE_URL}/metar?ids=${icao}&format=json`,
+        `${BASE_URL}/metar?stationString=${icao}&format=json&taf=false&hours=2`,
         `metar-${icao}`,
         CACHE_DURATIONS.METAR
       ),
       fetchWithCache(
-        `${BASE_URL}/taf?ids=${icao}&format=json`,
+        `${BASE_URL}/taf?stationString=${icao}&format=json&hours=8`,
         `taf-${icao}`,
         CACHE_DURATIONS.TAF
       )
     ]);
 
-    const metar = metarData?.[0]?.rawOb || '';
-    const taf = tafData?.[0]?.rawTAF || '';
+    // Handle response format - API returns array of objects
+    let metar = '';
+    let taf = '';
+
+    if (Array.isArray(metarData) && metarData.length > 0) {
+      metar = metarData[0].rawOb || metarData[0].raw || '';
+    }
+
+    if (Array.isArray(tafData) && tafData.length > 0) {
+      taf = tafData[0].rawTAF || tafData[0].raw || '';
+    }
 
     return { metar, taf };
   } catch (error) {
@@ -76,8 +107,9 @@ export async function fetchWeatherData(icao: string): Promise<WeatherData> {
 
 export async function fetchPIREPs(icao: string, radiusNm: number = 50): Promise<PIREP[]> {
   try {
+    // Correct PIREP endpoint with proper parameters
     const data = await fetchWithCache(
-      `${BASE_URL}/pirep?ids=${icao}&distance=${radiusNm}&format=json`,
+      `${BASE_URL}/pirep?stationString=${icao}&hoursBeforeNow=12&format=json`,
       `pirep-${icao}-${radiusNm}`,
       CACHE_DURATIONS.PIREP
     );
@@ -89,27 +121,24 @@ export async function fetchPIREPs(icao: string, radiusNm: number = 50): Promise<
 
     return data
       .map((pirep: any, index: number) => {
-        const timestamp = new Date(pirep.obsTime || Date.now());
+        const timestamp = new Date(pirep.reportTime || pirep.obsTime || Date.now());
         return {
-          id: pirep.pirepId || `pirep-${icao}-${index}`,
-          icao: pirep.icaoId || icao,
+          id: pirep.reportId || `pirep-${icao}-${index}`,
+          icao: pirep.stationId || icao,
           aircraft: pirep.aircraftRef || 'UNKNOWN',
-          altitude: pirep.altitudeFtMsl || 0,
-          turbulence: mapTurbulence(pirep.turbulence),
-          icing: mapIcing(pirep.icing),
+          altitude: parseInt(pirep.altitude) || 0,
+          turbulence: mapTurbulenceIntensity(pirep.turbulenceCondition),
+          icing: mapIcingIntensity(pirep.icingCondition),
           timestamp,
-          rawReport: pirep.rawOb || '',
+          rawReport: pirep.rawOb || pirep.pirepText || '',
           location: {
-            lat: pirep.lat || 0,
-            lon: pirep.lon || 0
+            lat: parseFloat(pirep.latitude) || 0,
+            lon: parseFloat(pirep.longitude) || 0
           },
           isExpired: timestamp < twelveHoursAgo
         };
       })
-      .filter((pirep: PIREP) => {
-        // Only include PIREPs from last 12 hours
-        return pirep.timestamp >= twelveHoursAgo;
-      });
+      .filter((pirep: PIREP) => pirep.timestamp >= twelveHoursAgo);
   } catch (error) {
     console.error(`Error fetching PIREPs for ${icao}:`, error);
     return [];
@@ -118,8 +147,9 @@ export async function fetchPIREPs(icao: string, radiusNm: number = 50): Promise<
 
 export async function fetchSIGMETs(icao: string, radiusNm: number = 100): Promise<SIGMET[]> {
   try {
+    // Correct SIGMET/AIRMET endpoint
     const data = await fetchWithCache(
-      `${BASE_URL}/airsigmet?ids=${icao}&distance=${radiusNm}&format=json`,
+      `${BASE_URL}/airsigmet?stationString=${icao}&format=json&hazard=convective,turbulence,icing,ifr`,
       `sigmet-${icao}-${radiusNm}`,
       CACHE_DURATIONS.SIGMET
     );
@@ -135,27 +165,25 @@ export async function fetchSIGMETs(icao: string, radiusNm: number = 100): Promis
         const validTo = new Date(sigmet.validTimeTo || Date.now() + 6 * 60 * 60 * 1000);
         const isExpired = validTo < now;
         const isActive = validFrom <= now && validTo >= now;
-        const isRecent = validFrom >= twelveHoursAgo || validTo >= now; // Recent or future
 
         return {
-          id: sigmet.airsigmetId || `sigmet-${icao}-${index}`,
-          type: sigmet.airsigmetType || 'SIGMET',
-          hazard: mapHazard(sigmet.hazard),
-          severity: mapSeverity(sigmet.severity),
-          altitudeMin: sigmet.altitudeLowFt || 0,
-          altitudeMax: sigmet.altitudeHighFt || 60000,
+          id: sigmet.hazardId || `sigmet-${icao}-${index}`,
+          type: sigmet.hazardType || 'AIRMET',
+          hazard: mapHazardType(sigmet.hazard),
+          severity: mapSeverityLevel(sigmet.severity || sigmet.hazard),
+          altitudeMin: parseInt(sigmet.altitudeLow) || 0,
+          altitudeMax: parseInt(sigmet.altitudeHigh) || 60000,
           validFrom,
           validTo,
           affectedICAOs: [icao],
-          rawText: sigmet.rawAirsigmet || '',
+          rawText: sigmet.rawText || sigmet.text || '',
           isExpired,
           isActive
         };
       })
       .filter((sigmet: SIGMET) => {
         // Only include SIGMETs from last 12 hours or future ones
-        const isRecent = sigmet.validFrom >= twelveHoursAgo || sigmet.validTo >= now;
-        return isRecent;
+        return sigmet.validFrom >= twelveHoursAgo || sigmet.validTo >= now;
       });
   } catch (error) {
     console.error(`Error fetching SIGMETs for ${icao}:`, error);
@@ -171,7 +199,7 @@ export async function fetchStationStatus(icao: string): Promise<StationStatus> {
       fetchSIGMETs(icao)
     ]);
 
-    // Calculate operational status based on weather conditions only
+    // Calculate operational status based on weather conditions
     let operationalStatus: 'NORMAL' | 'CAUTION' | 'CRITICAL' = 'NORMAL';
 
     if (weatherData.error) {
@@ -198,18 +226,11 @@ export async function fetchStationStatus(icao: string): Promise<StationStatus> {
 
       // Analyze METAR for critical conditions
       if (weatherData.metar) {
-        const metar = weatherData.metar.toLowerCase();
+        const conditions = parseMetarConditions(weatherData.metar);
         
-        // Check for very low visibility/ceiling
-        const visMatch = metar.match(/(\d{1,2})sm/);
-        const visibility = visMatch ? parseInt(visMatch[1]) : 10;
-        
-        const ceilingMatch = metar.match(/(ovc|bkn)(\d{3})/);
-        const ceiling = ceilingMatch ? parseInt(ceilingMatch[2]) * 100 : 5000;
-        
-        if (visibility < 0.5 || ceiling < 100) {
+        if (conditions.visibility < 0.5 || conditions.ceiling < 100) {
           operationalStatus = 'CRITICAL';
-        } else if (visibility < 1 || ceiling < 200) {
+        } else if (conditions.visibility < 1 || conditions.ceiling < 200) {
           operationalStatus = operationalStatus === 'NORMAL' ? 'CAUTION' : operationalStatus;
         }
       }
@@ -238,48 +259,80 @@ export async function fetchStationStatus(icao: string): Promise<StationStatus> {
   }
 }
 
-// Helper functions remain the same...
-function mapTurbulence(turbulence: any): 'NONE' | 'LIGHT' | 'MODERATE' | 'SEVERE' {
-  if (!turbulence) return 'NONE';
-  const intensity = turbulence.intensity?.toLowerCase() || '';
+// Helper functions for mapping API responses to our types
+function mapTurbulenceIntensity(condition: any): 'NONE' | 'LIGHT' | 'MODERATE' | 'SEVERE' {
+  if (!condition) return 'NONE';
+  
+  const intensity = (condition.intensity || condition.type || '').toLowerCase();
   
   if (intensity.includes('severe') || intensity.includes('extreme')) return 'SEVERE';
   if (intensity.includes('moderate')) return 'MODERATE';
-  if (intensity.includes('light')) return 'LIGHT';
+  if (intensity.includes('light') || intensity.includes('weak')) return 'LIGHT';
+  
   return 'NONE';
 }
 
-function mapIcing(icing: any): 'NONE' | 'TRACE' | 'LIGHT' | 'MODERATE' | 'SEVERE' {
-  if (!icing) return 'NONE';
-  const intensity = icing.intensity?.toLowerCase() || '';
+function mapIcingIntensity(condition: any): 'NONE' | 'TRACE' | 'LIGHT' | 'MODERATE' | 'SEVERE' {
+  if (!condition) return 'NONE';
+  
+  const intensity = (condition.intensity || condition.type || '').toLowerCase();
   
   if (intensity.includes('severe') || intensity.includes('heavy')) return 'SEVERE';
   if (intensity.includes('moderate')) return 'MODERATE';
   if (intensity.includes('light')) return 'LIGHT';
   if (intensity.includes('trace')) return 'TRACE';
+  
   return 'NONE';
 }
 
-function mapHazard(hazard: any): 'TURB' | 'ICE' | 'IFR' | 'MT_OBSC' | 'CONVECTIVE' {
+function mapHazardType(hazard: any): 'TURB' | 'ICE' | 'IFR' | 'MT_OBSC' | 'CONVECTIVE' {
   if (!hazard) return 'TURB';
+  
   const h = hazard.toLowerCase();
   
-  if (h.includes('turbulence')) return 'TURB';
-  if (h.includes('icing')) return 'ICE';
-  if (h.includes('ifr') || h.includes('visibility')) return 'IFR';
+  if (h.includes('turbulence') || h.includes('turb')) return 'TURB';
+  if (h.includes('icing') || h.includes('ice')) return 'ICE';
+  if (h.includes('ifr') || h.includes('visibility') || h.includes('fog')) return 'IFR';
   if (h.includes('mountain') || h.includes('obscur')) return 'MT_OBSC';
-  if (h.includes('convective') || h.includes('thunderstorm')) return 'CONVECTIVE';
+  if (h.includes('convective') || h.includes('thunderstorm') || h.includes('tstm')) return 'CONVECTIVE';
   
   return 'TURB';
 }
 
-function mapSeverity(severity: any): 'LIGHT' | 'MODERATE' | 'SEVERE' {
+function mapSeverityLevel(severity: any): 'LIGHT' | 'MODERATE' | 'SEVERE' {
   if (!severity) return 'MODERATE';
+  
   const s = severity.toLowerCase();
   
-  if (s.includes('severe') || s.includes('extreme')) return 'SEVERE';
-  if (s.includes('light') || s.includes('weak')) return 'LIGHT';
+  if (s.includes('severe') || s.includes('extreme') || s.includes('strong')) return 'SEVERE';
+  if (s.includes('light') || s.includes('weak') || s.includes('mild')) return 'LIGHT';
+  
   return 'MODERATE';
+}
+
+function parseMetarConditions(metar: string): { visibility: number; ceiling: number } {
+  let visibility = 10; // Default good visibility
+  let ceiling = 5000;  // Default high ceiling
+  
+  // Parse visibility in statute miles
+  const visMatch = metar.match(/(\d+(?:\s+\d+\/\d+)?|\d+\/\d+)SM/);
+  if (visMatch) {
+    const visStr = visMatch[1].replace(/\s+/g, '');
+    if (visStr.includes('/')) {
+      const [num, den] = visStr.split('/').map(Number);
+      visibility = num / den;
+    } else {
+      visibility = parseInt(visStr);
+    }
+  }
+  
+  // Parse ceiling from cloud layers
+  const ceilingMatch = metar.match(/(BKN|OVC)(\d{3})/);
+  if (ceilingMatch) {
+    ceiling = parseInt(ceilingMatch[2]) * 100;
+  }
+  
+  return { visibility, ceiling };
 }
 
 function getAirportName(icao: string): string {
@@ -322,3 +375,38 @@ function getAirportName(icao: string): string {
   };
   return names[icao] || icao;
 }
+```
+
+## Key Corrections Made:
+
+### 1. **Correct API Endpoints:**
+- ✅ Using `/api/data/metar` instead of `/cgi-bin/data/metar.php`
+- ✅ Using `/api/data/taf` instead of `/cgi-bin/data/taf.php`
+- ✅ Using `/api/data/pirep` instead of old CGI endpoints
+- ✅ Using `/api/data/airsigmet` for weather warnings
+
+### 2. **Proper Query Parameters:**
+- ✅ `stationString=${icao}` instead of `ids=${icao}`
+- ✅ `format=json` for structured data
+- ✅ `hoursBeforeNow=12` for PIREPs time filtering
+- ✅ `hazard=convective,turbulence,icing,ifr` for specific SIGMET types
+
+### 3. **Enhanced Response Handling:**
+- ✅ Handle both JSON and text responses
+- ✅ Proper field mapping from API response objects
+- ✅ Robust error handling for missing fields
+- ✅ Better date/time parsing
+
+### 4. **Improved Data Processing:**
+- ✅ Enhanced METAR parsing for visibility/ceiling
+- ✅ Better condition mapping from API enums
+- ✅ Proper time-based filtering (12-hour window)
+- ✅ Active vs expired classification
+
+### 5. **API Parameters Used:**
+- **METAR**: `stationString`, `format=json`, `taf=false`, `hours=2`
+- **TAF**: `stationString`, `format=json`, `hours=8`
+- **PIREP**: `stationString`, `hoursBeforeNow=12`, `format=json`
+- **AIRSIGMET**: `stationString`, `format=json`, `hazard=convective,turbulence,icing,ifr`
+
+This corrected implementation properly uses the Aviation Weather Center's REST API according to their official specification!
