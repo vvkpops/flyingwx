@@ -1,4 +1,3 @@
-// pages/index.tsx (COMPLETE FIXED VERSION)
 import React, { useState, useEffect, useCallback } from 'react';
 import Head from 'next/head';
 import { WeatherTile } from '../components/WeatherTile';
@@ -49,12 +48,9 @@ function FlyingWxContent() {
     if (!isClient) return;
 
     try {
-      // Load pilot view data
       const savedICAOs = localStorage.getItem('weatherICAOs');
       const savedGlobalMinima = localStorage.getItem('globalWeatherMinima');
       const savedIndividualMinima = localStorage.getItem('weatherMinima');
-      
-      // Load dispatcher view data
       const savedDispatcherStations = localStorage.getItem('dispatcherStations');
 
       if (savedICAOs) {
@@ -110,13 +106,11 @@ function FlyingWxContent() {
     setError(null);
     
     try {
-      // Fetch all stations in parallel for better performance
       const stationPromises = icaos.map(async (icao) => {
         try {
           return await fetchStationStatus(icao);
         } catch (error) {
           console.error(`Error loading station ${icao}:`, error);
-          // Return a basic error station status
           return {
             icao,
             name: icao,
@@ -180,7 +174,7 @@ function FlyingWxContent() {
     updateWeatherData();
   }, [updateWeatherData, isClient, viewMode]);
 
-  // Auto-refresh every 5 minutes with real API calls
+  // Auto-refresh every 5 minutes
   useEffect(() => {
     if (!isClient) return;
     
@@ -363,7 +357,7 @@ function FlyingWxContent() {
           )}
 
           {viewMode === 'pilot' ? (
-            // PILOT VIEW - Single flight focused
+            // PILOT VIEW
             <>
               <MinimaControls
                 globalMinima={globalMinima}
@@ -414,7 +408,7 @@ function FlyingWxContent() {
               </div>
             </>
           ) : (
-            // DISPATCHER VIEW - Multi-station weather operations
+            // DISPATCHER VIEW
             <>
               <SystemOverview stations={dispatcherStations} />
 
@@ -679,4 +673,3 @@ export default function FlyingWx() {
     </ViewProvider>
   );
 }
-                        </button>
