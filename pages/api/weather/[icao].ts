@@ -132,4 +132,105 @@ async function fetchWeatherDataServer(icao: string): Promise<WeatherApiResponse>
         const lines = responseText.split('\n').filter(line => line.trim());
         if (lines.length > 0) {
           // For NWS files, the METAR is typically on the second line after timestamp
-          metar = lines.length
+          metar = lines.length > 1 ? lines[1].trim() : lines[0].trim();
+        }
+      }
+
+      if (metar) {
+        console.log(`Got METAR from ${url}: ${metar.substring(0, 50)}...`);
+        break; // Success, stop trying other sources
+      }
+
+    } catch (error) {
+      lastError = error as Error;
+      console.warn(`METAR source failed: ${url}`, error);
+      continue;
+    }
+  }
+
+  // Fetch TAF
+  for (const url of tafSources) {
+    try {
+      console.log(`Trying TAF source: ${url}`);
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'FlyingWx/1.0 (https://flyingwx.com)',
+          'Accept': 'application/json, text/plain, */*'
+        }
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const responseText = await response.text();
+      
+      if (!responseText || responseText.includes('not found') || responseText.length < 10) {
+        throw new Error('No TAF data available');
+      }
+
+      // Parse response based on content type
+      if (response.headers.get('content-type')?.includes('application/json')) {
+        try {
+          const jsonData = JSON.parse(responseText);
+          if (Array.isArray(jsonData) && jsonData.length > 0) {
+            taf = jsonData[0].rawTAF || jsonData[0].raw || '';
+          }
+        } catch (e) {
+          throw new Error('Invalid JSON response');
+        }
+      } else {
+        // Handle plain text responses (NWS format)
+        const lines = responseText.split('\n').filter(line => line.trim());
+        if (lines.length > 0) {
+          // For NWS TAF files, skip timestamp and get the TAF content
+          taf = lines.length > 1 ? lines.slice(1).join('\n').trim() : lines[0].trim();
+        }
+      }
+
+      if (taf) {
+        console.log(`Got TAF from ${url}: ${taf.substring(0, 50)}...`);
+        break; // Success, stop trying other sources
+      }
+
+    } catch (error) {
+      lastError = error as Error;
+      console.warn(`TAF source failed: ${url}`, error);
+      continue;
+    }
+  }
+
+  // Clean up the weather text
+  metar = cleanWeatherText(metar);
+  taf = cleanWeatherText(taf);
+
+  // If we didn't get any data at all, throw error
+  if (!metar && !taf) {
+    throw lastError || new Error(`No weather data available for ${icao}`);
+  }
+
+  return { metar, taf };
+}
+
+function cleanWeatherText(text: string): string {
+  if (!text) return '';
+  
+  // Remove extra whitespace and normalize
+  let cleaned = text.replace(/\s+/g, ' ').trim();
+  
+  // Remove common prefixes/suffixes that aren't part of the actual report
+  cleaned = cleaned.replace(/^(METAR|TAF|SPECI)\s+/, '');
+  cleaned = cleaned.replace(/\s+(METAR|TAF|SPECI)$/, '');
+  
+  // Remove timestamp lines that might be included
+  cleaned = cleaned.replace(/^\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}\s*/, '');
+  
+  return cleaned;
+}
