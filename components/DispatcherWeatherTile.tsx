@@ -5,12 +5,14 @@ interface DispatcherWeatherTileProps {
   station: StationStatus;
   onRemove: () => void;
   onViewDetails: () => void;
+  onRefresh?: () => void;
 }
 
 export function DispatcherWeatherTile({ 
   station, 
   onRemove, 
-  onViewDetails 
+  onViewDetails,
+  onRefresh 
 }: DispatcherWeatherTileProps) {
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -28,6 +30,29 @@ export function DispatcherWeatherTile({
       case 'CRITICAL': return '🚨';
       default: return '❓';
     }
+  };
+
+  const getDelayRiskColor = (risk: number) => {
+    if (risk >= 70) return 'text-red-400';
+    if (risk >= 40) return 'text-yellow-400';
+    if (risk >= 20) return 'text-orange-400';
+    return 'text-green-400';
+  };
+
+  // Get weather summary from METAR
+  const getWeatherSummary = (metar: string) => {
+    if (!metar) return 'No data';
+    
+    // Extract key info from METAR
+    const visMatch = metar.match(/(\d+)SM/);
+    const ceilingMatch = metar.match(/(OVC|BKN)(\d{3})/);
+    const windMatch = metar.match(/(\d{3})(\d{2,3})KT/);
+    
+    const visibility = visMatch ? `${visMatch[1]}SM` : '';
+    const ceiling = ceilingMatch ? `${ceilingMatch[1]}${parseInt(ceilingMatch[2]) * 100}` : '';
+    const wind = windMatch ? `${windMatch[1]}°/${windMatch[2]}kt` : '';
+    
+    return [visibility, ceiling, wind].filter(Boolean).join(' ') || metar.substring(0, 30) + '...';
   };
 
   return (
@@ -52,36 +77,53 @@ export function DispatcherWeatherTile({
         <span className="text-2xl mr-2">{getStatusIcon(station.operationalStatus)}</span>
         <div className="text-center">
           <div className="font-semibold">{station.operationalStatus}</div>
-          <div className="text-sm text-gray-400">
-            Delay Risk: {station.delayProbability}%
+          <div className={`text-sm font-semibold ${getDelayRiskColor(station.delayProbability)}`}>
+            {station.delayProbability}% delay risk
           </div>
         </div>
       </div>
 
-      {/* Quick Weather Summary */}
+      {/* Weather Summary */}
       {station.metar.metar && (
-        <div className="text-xs mb-2">
-          <strong>Current:</strong> {station.metar.metar.substring(0, 50)}...
+        <div className="text-xs mb-2 bg-gray-700 rounded p-2">
+          <div className="text-gray-400 mb-1">Current:</div>
+          <div className="text-white">
+            {getWeatherSummary(station.metar.metar)}
+          </div>
         </div>
       )}
 
       {/* Alert Summary */}
       <div className="flex justify-between text-xs mb-3">
         <div className="text-center">
-          <div className="font-semibold text-blue-400">{station.pireps.length}</div>
+          <div className={`font-semibold ${station.pireps.length > 0 ? 'text-blue-400' : 'text-gray-500'}`}>
+            {station.pireps.length}
+          </div>
           <div className="text-gray-400">PIREPs</div>
         </div>
         <div className="text-center">
-          <div className="font-semibold text-orange-400">{station.sigmets.length}</div>
-          <div className="text-gray-400">SIGMETs</div>
+          <div className={`font-semibold ${station.sigmets.length > 0 ? 'text-orange-400' : 'text-gray-500'}`}>
+            {station.sigmets.length}
+          </div>
+          <div className="text-gray-400">Warnings</div>
         </div>
         <div className="text-center">
-          <div className="font-semibold text-green-400">
-            {station.operationalStatus === 'NORMAL' ? '0' : '1+'}
+          <div className={`font-semibold ${
+            station.operationalStatus === 'CRITICAL' ? 'text-red-400' :
+            station.operationalStatus === 'CAUTION' ? 'text-yellow-400' : 'text-green-400'
+          }`}>
+            {station.operationalStatus === 'NORMAL' ? '0' : station.sigmets.filter(s => s.severity === 'SEVERE').length || '1'}
           </div>
-          <div className="text-gray-400">Issues</div>
+          <div className="text-gray-400">Critical</div>
         </div>
       </div>
+
+      {/* Error Display */}
+      {station.metar.error && (
+        <div className="text-xs text-red-400 mb-2 bg-red-900 rounded p-2">
+          Error: {station.metar.error}
+        </div>
+      )}
 
       {/* Actions */}
       <div className="flex gap-2">
@@ -91,9 +133,15 @@ export function DispatcherWeatherTile({
         >
           Details
         </button>
-        <button className="flex-1 bg-gray-600 px-2 py-1 rounded text-white hover:bg-gray-700 text-sm transition-colors">
-          Monitor
-        </button>
+        {onRefresh && (
+          <button
+            onClick={onRefresh}
+            className="bg-gray-600 px-2 py-1 rounded text-white hover:bg-gray-700 text-sm transition-colors"
+            title="Refresh Station Data"
+          >
+            🔄
+          </button>
+        )}
       </div>
 
       {/* Last Updated */}
